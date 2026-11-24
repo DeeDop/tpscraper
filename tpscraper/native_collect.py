@@ -11,7 +11,6 @@ from .auth import expires_at, AuthError
 from .native_schema import CANDLE_STREAM, QUOTE_STREAM, candle_request, candle_item, quote_stream_request, quote_item
 from .native_probe import messages
 from .extended_schema import plans, trade_rows, book_summary, footprint_rows, tpo_rows
-from .flow_state import BookGap
 import random
 
 
@@ -39,6 +38,7 @@ def collect_native(state,auth,stop):
         halt_lock=threading.Lock()
         workers=[]
         retry_jobs={}
+        renew=False
 
         def deny(reason):
             with halt_lock:
@@ -50,7 +50,6 @@ def collect_native(state,auth,stop):
                           limits=httpx.Limits(max_connections=1+len(state.instruments)*(2 if state.micro else 1)+state.flow_budget,max_keepalive_connections=16),
                           trust_env=False,follow_redirects=False) as client:
             def run(service,payload,decode,apply,report,label,capability=None):
-                observed=False
                 def remember(status):
                     if capability is not None:
                         symbol,kind=capability
@@ -99,14 +98,15 @@ def collect_native(state,auth,stop):
                                         return
                                     break
                                 item=decode(raw)
-                                if item:
-                                    state.stream_event(label,"message")
-                                if item is not None and apply(item) is False:
+                                if item is None:
+                                    continue
+                                accepted=apply(item)
+                                if capability is None and accepted is False:
                                     return
-                                if capability is not None and item:
-                                    observed_this_attempt=True
-                                    if not observed:
-                                        observed=True
+                                if item and (capability is None or accepted):
+                                    state.stream_event(label,"message")
+                                    if capability is not None and not observed_this_attempt:
+                                        observed_this_attempt=True
                                         remember("observed")
                         finally:
                             stream.close()
@@ -201,8 +201,7 @@ def collect_native(state,auth,stop):
                     def payload():
                         return plans(symbol,provider)[kind][1]
                     def apply(rows):
-                        flow.ingest(kind,rows)
-                        return True
+                        return flow.ingest(kind,rows)
                     def report(reason):
                         flow.status(kind,reason)
                     active[(key,kind)]=launch(service,payload,decoders[kind],apply,report,
@@ -210,7 +209,6 @@ def collect_native(state,auth,stop):
 
                 state.refresh_capabilities=False  # force once, not on every renewal
                 next_launch=time.monotonic()
-                renew=False
                 next_record=time.monotonic()
                 while not stop.is_set() and not cycle.is_set():
                     for job,thread in list(active.items()):
@@ -248,17 +246,21 @@ def collect_native(state,auth,stop):
                 cycle.set()
                 # Close sockets to wake blocked readers before joining threads.
                 # Bound total shutdown time rather than waiting once per socket.
-                client.close()
-                deadline=time.monotonic()+5
+                try:
+                    client.close()
+                except (httpx.HTTPError,RuntimeError):
+                    state.stream_event("transport","error","client close failed")
+                deadline=time.monotonic()+25
                 for t in workers:
                     t.join(timeout=max(0,deadline-time.monotonic()))
                 if any(t.is_alive() for t in workers):
                     halt.append("stream shutdown incomplete; restart required")
                 state.all_quotes("native streams paused")
+                for inst in state.instruments:
+                    for period in ((60,30) if state.micro else (60,)):
+                        state.bar_state(inst.key,period,"paused")
                 for flow in state.flows.values():
-                    for kind in list(flow.states):
-                        if "restriction" not in flow.states[kind] and flow.states[kind] not in ("disabled_until_restart","restricted","no_data","unsupported","unavailable","cached_no_data","cached_unsupported","cached_unavailable"):
-                            flow.status(kind,"paused")
+                    flow.pause()
         if halt:
             state.stop(halt[0])
             print(halt[0]+". Resolve provider access before restarting.",flush=True)
