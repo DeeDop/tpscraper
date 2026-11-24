@@ -60,3 +60,7 @@ Run `py -m tpscraper.console --local-chrome` on Windows. Approve opening your no
 ## Captured instrument catalog
 
 See [instrument documentation](docs/INSTRUMENTS.md), [562 captured provider/symbol pairs](docs/takeprofit_tickers.csv), and [provider codes](docs/takeprofit_exchanges.csv). Rebuild offline with `py -m tpscraper.har_catalog path-to-local.har --output docs`. This catalog reflects captured screener results, not verified live quote entitlements.
+
+## Easy ticker input
+
+Run `py -m tpscraper.console --local-chrome --remember` and type a ticker at the prompt. Unique captured matches are filled automatically; ambiguous matches offer a numbered selection. For any new ticker, enter its exact provider code. The captured CSV remains reference documentation, not an allowlist. You can bypass it with an exact pair, e.g. `py -m tpscraper.console FXPPST:XAU/USD --local-chrome --remember --interval 1`. A returned candidate quote does not by itself verify real-time access or price semantics. The console stops on access denial or rate limiting.
