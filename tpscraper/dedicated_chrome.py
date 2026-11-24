@@ -67,7 +67,7 @@ class DedicatedChromeAuth(LocalChromeAuth):
         self._open()
         response=None
         try:
-            # This context shares the dedicated browser's own session.
+            # This context shares the explicitly approved browser's own session.
             # Never inspect cookies, request headers, or unrelated traffic.
             response=self._context.request.get(
                 TOKEN_URL,headers={"Accept":"application/json","Cache-Control":"no-cache"},
@@ -78,7 +78,7 @@ class DedicatedChromeAuth(LocalChromeAuth):
         except AuthError:
             raise
         except Exception:
-            raise AuthError("Dedicated Chrome authorization request failed. Check connection and signed-in session.") from None
+            raise AuthError("Chrome authorization request failed. Check connection and signed-in session.") from None
         finally:
             if response is not None:
                 try:
@@ -92,7 +92,7 @@ class DedicatedChromeAuth(LocalChromeAuth):
                 self.store.save(value)
             except StoreError:
                 self.emit("Encrypted storage unavailable; using memory only.")
-        self.emit("Dedicated Chrome authorization accepted.")
+        self.emit("Chrome authorization accepted.")
         return value
 
     def prepare_renewal(self):
