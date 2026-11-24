@@ -253,7 +253,7 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
 
 <section class="card">
   <h2>Return correlation</h2>
-  <p class="sub">Pearson correlation of 1-minute log returns over bars the pair shares. Always uses 1-minute bars, independent of the Bars setting above, since it needs history to be meaningful.</p>
+  <p class="sub">Experimental Pearson correlation of aligned locally sampled 1-minute log returns. At least 10 overlapping completed returns required; not a predictive signal.</p>
   <div class="chart-wrap" id="corr-wrap"><div class="tip" id="corr-tip"></div></div>
 </section>
 
@@ -678,8 +678,8 @@ function spreadLabels(labels, minGap, top, bottom) {
 /** 30s candles have no backfill, so say so rather than looking broken. */
 function emptyNote() {
   return RES === "30s"
-    ? "Building 30-second candles from the live tick stream…"
-    : "Waiting for bar history…";
+    ? "Building 30-second candles from sampled quotes…"
+    : "Collecting local bars; no exchange history loaded yet…";
 }
 
 function timeTicks(t0, t1, count) {
@@ -826,6 +826,7 @@ function hexToRgb(hex) {
 /* ------------------------------------------------------ detail chart */
 
 function renderDetail() {
+  if (!FULL || !FULL.instruments.length) return;
   const picker = document.getElementById("detail-picker");
   picker.innerHTML = FULL.instruments.map((inst) =>
     `<button data-detail="${inst.key}" aria-pressed="${inst.key === SELECTED}">
@@ -836,6 +837,7 @@ function renderDetail() {
   });
 
   const inst = FULL.instruments.find((i) => i.key === SELECTED) || FULL.instruments[0];
+  SELECTED = inst.key;
   document.getElementById("detail-title").textContent = `${inst.name} · ${inst.symbol}`;
 
   const wrap = document.getElementById("detail-wrap");
@@ -1099,6 +1101,7 @@ function renderDetailStats(inst, bars) {
 
 function renderTables() {
   const payload = LIVE || FULL;
+  if (!payload) return;
   const head = ["Instrument", "Symbol", "Last", "Change", "Change %", "Bid", "Ask", "Open", "High", "Low",
     "Prev close", "Volume", "Range pos", "Ann. vol %", "Bars", "Ticks", "Feed"];
   const rows = payload.instruments.map((inst) => `<tr>
@@ -1137,6 +1140,8 @@ function renderLive() {
   if (!LIVE) return;
   renderTiles(LIVE);
   renderChecks(LIVE);
+  document.getElementById("conn-dot").style.background = css(LIVE.connected ? "--warning" : "--critical");
+  document.getElementById("conn-text").textContent = LIVE.connected ? "receiving snapshots" : (LIVE.reason || "no upstream data");
   const worst = LIVE.instruments.some((i) => i.status === "critical") ? "critical"
     : LIVE.instruments.some((i) => i.status === "serious") ? "serious"
     : LIVE.instruments.some((i) => i.status === "warning") ? "warning" : "good";
