@@ -85,13 +85,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
         return {k:payload[k] for k in ("quotes","connected","mode","reason","generated_utc")}
 
 
-def collect(state,auth,stop,interval,client,request=probe):
+def collect(state,auth,stop,interval,client,request=probe,requests_per_second=1):
     failures=0
+    retry_at={}
+    ordered=sorted(state.instruments,key=lambda i: i.key!="gold")
     while not stop.is_set():
         started=time.monotonic()
-        for inst in state.instruments:
+        for inst in ordered:
             if stop.is_set():
                 return
+            if time.monotonic()<retry_at.get(inst.key,0):
+                continue
             provider,symbol=inst.symbol.split(":",1)
             begin=time.monotonic()
             result=request("quote",10,auth,symbol,provider,client=client)
@@ -101,6 +105,10 @@ def collect(state,auth,stop,interval,client,request=probe):
                 state.stop(outcome)
                 print("Collection stopped:",outcome,"; restart after resolving authorization or provider limits.",flush=True)
                 return
+            if result.get("grpc_status") in (3,5,12) or outcome in ("response_unvalidated","unexpected_content_type"):
+                # Do not repeatedly request unknown or unsupported instruments.
+                retry_at[inst.key]=time.monotonic()+60
+                print(inst.symbol,":",outcome,"(retry in 60s)",flush=True)
             if outcome=="probe_error":
                 failures+=1
                 if failures>=3:
@@ -108,8 +116,8 @@ def collect(state,auth,stop,interval,client,request=probe):
                     return
             else:
                 failures=0
-            # Sequential, at most one request per second globally; slower if provider is slow.
-            if stop.wait(max(0,1-(time.monotonic()-begin))):
+            # Explicit global rate cap; no bursts or concurrent requests.
+            if stop.wait(max(0,1/requests_per_second-(time.monotonic()-begin))):
                 return
         if stop.wait(max(0,interval-(time.monotonic()-started))):
             return
@@ -121,6 +129,7 @@ def main(argv=None):
     p.add_argument("--port",type=int,default=8789)
     p.add_argument("--host",choices=("127.0.0.1",),default="127.0.0.1")
     p.add_argument("--interval",type=float,default=15,help="Minimum seconds per full watchlist sweep")
+    p.add_argument("--requests-per-second",type=float,default=1,help="Global sequential request cap (1–3; increase only if provider permits)")
     p.add_argument("--history",type=int,default=360,help="Local 1-minute bar retention")
     p.add_argument("--resolution",choices=("1",),default="1",help="Local base bars are one minute")
     p.add_argument("--no-browser",action="store_true")
@@ -129,7 +138,7 @@ def main(argv=None):
     p.add_argument("--chrome-profile")
     p.add_argument("--ticker",action="append",default=[],help="Override preset with repeatable PROVIDER:TICKER values")
     args=p.parse_args(argv)
-    if not 1<=args.interval<=3600 or not 1<=args.history<=1440 or not 1024<=args.port<=65535:
+    if not 1<=args.requests_per_second<=3 or not 1<=args.interval<=3600 or not 1<=args.history<=1440 or not 1024<=args.port<=65535:
         p.error("Invalid interval, port or history")
     instruments=WATCHLISTS[args.watchlist]
     if args.ticker:
@@ -152,7 +161,7 @@ def main(argv=None):
         except StoreError as exc:
             print(str(exc)+" Continuing in memory only.")
     auth=LocalChromeAuth(store=store,opener=lambda:open_chrome(args.chrome_profile))
-    state=DashboardState(instruments,args.history,max(args.interval,len(instruments)))
+    state=DashboardState(instruments,args.history,max(args.interval,len(instruments)/args.requests_per_second))
     stop=threading.Event()
     server=None
     thread=None
@@ -166,11 +175,11 @@ def main(argv=None):
         thread.start()
         url=f"http://{args.host}:{args.port}/"
         print("TakeProfit dashboard:",url,flush=True)
-        print("Snapshot polling; unverified prices. Ctrl+C to stop.",flush=True)
+        print(f"Snapshot polling; target sweep {max(args.interval,len(instruments)/args.requests_per_second):g}s; global cap {args.requests_per_second:g} requests/s. Unverified prices. Ctrl+C to stop.",flush=True)
         if not args.no_browser:
             webbrowser.open(url)
         with httpx.Client(http2=True,timeout=10,follow_redirects=False,trust_env=False) as client:
-            collect(state,auth,stop,args.interval,client)
+            collect(state,auth,stop,args.interval,client,requests_per_second=args.requests_per_second)
         if not stop.is_set():
             print("Dashboard remains available for inspection; Ctrl+C to exit.",flush=True)
             while not stop.wait(1):
