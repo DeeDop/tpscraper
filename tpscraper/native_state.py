@@ -4,15 +4,19 @@ import threading
 import time
 from statistics import correlation, stdev
 from .dashboard_state import utc, returns
+from .flow_state import FlowState
 
 
 class NativeDashboardState:
-    def __init__(self,instruments,history=360,micro=False):
+    def __init__(self,instruments,history=360,micro=False,orderflow=False,recorder=None):
         self.instruments=tuple(instruments)
         self.history=history
         self.micro=micro
         self.lock=threading.RLock()
         self.started=time.monotonic()
+        verified={'CXBNCE:BTC/USDT','CXBNF8:XAU/USDT.P','FXPPST:XAU/USD'}
+        self.flows={i.key:FlowState(i.symbol) for i in instruments if orderflow and i.symbol in verified}
+        self.recorder=recorder
         self.running=True
         self.reason="connecting native streams"
         self.data={i.key:dict(sessions={},last=None,received=None,exchange=None,
@@ -97,7 +101,22 @@ class NativeDashboardState:
     def series(target,period,now):
         return [dict(target[t],closed=t+period<=now) for t in sorted(target)]
 
+    def flow_snapshot(self,details=False):
+        now=time.time()
+        return {k:f.snapshot(now,details) for k,f in self.flows.items()}
+
+    def record_flow(self):
+        if self.recorder is None:
+            return
+        try:
+            self.recorder.write(self.flow_snapshot())
+        except (OSError,RuntimeError):
+            print('Flow recording disabled after local write error.',flush=True)
+            self.recorder.close()
+            self.recorder=None
+
     def snapshot(self,with_series=True):
+        flow=self.flow_snapshot(False)
         with self.lock:
             now=time.time()
             instruments=[]; quotes={}
@@ -148,6 +167,13 @@ class NativeDashboardState:
                     realized_vol_pct=vol,bar_count=len(bars),bar_updates=r["bar_updates"],history_ready=60 in r["ready"])
                 if with_series:
                     item.update(bars=self.series(bars,60,now),micro_bars=self.series(r["micro_bars"],30,now))
+                if i.key in flow:
+                    f=flow[i.key]
+                    item['flow']=f
+                    book=f['book']
+                    if book['fresh']:
+                        item.update(bid=book['bid'],ask=book['ask'])
+                        checks[4].update(status='good',detail=f"Synchronized book; spread {book['spread']:.6g}")
                 instruments.append(item)
                 quotes[i.key]=dict(symbol=i.symbol,last=last,exchange_utc=utc(r["exchange"]) if r["exchange"] is not None else None,
                     received_utc=utc(r["received"]) if r["received"] is not None else None,price_age_s=ex_age,
@@ -155,7 +181,11 @@ class NativeDashboardState:
                     outcome=r["quote_state"],samples=r["ticks"],price_changes=r["changes"],
                     main_session=dict(r["sessions"].get("main_session",{})),
                     daily_session=dict(r["sessions"].get("daily_session",{})))
-            payload=dict(instruments=instruments,quotes=quotes,connected=any(q["status"] in ("LIVE","UNVERIFIED") for q in quotes.values()),
+            for k,f in flow.items():
+                quotes[k]['orderflow']=f
+                if f['book']['fresh']:
+                    quotes[k].update(bid=f['book']['bid'],ask=f['book']['ask'])
+            payload=dict(instruments=instruments,quotes=quotes,orderflow=flow,connected=any(q["status"] in ("LIVE","UNVERIFIED") for q in quotes.values()),
                 mode="native_push",reason=self.reason,history_source="takeprofit_native",micro_enabled=self.micro,
                 history_ready=sum(i["history_ready"] for i in instruments),generated_utc=utc(now),
                 uptime_seconds=time.monotonic()-self.started)
