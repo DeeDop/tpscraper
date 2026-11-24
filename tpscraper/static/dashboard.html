@@ -217,10 +217,10 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
 
 <div class="filters">
   <span class="label">Bars</span>
-  <button data-res="30s" title="aggregated locally from sampled quotes">30s</button>
+  <button data-res="30s" title="Optional native 30-second bars; enable --native-30s">30s</button>
   <button data-res="1m" aria-pressed="true">1m</button>
-  <button data-res="5m" title="aggregated from local 1-minute samples">5m</button>
-  <button data-res="15m" title="aggregated from local 1-minute samples">15m</button>
+  <button data-res="5m" title="aggregated from 1-minute bars">5m</button>
+  <button data-res="15m" title="aggregated from 1-minute bars">15m</button>
   <span class="label" style="margin-left:14px">Window</span>
   <button data-window="5">5m</button>
   <button data-window="15">15m</button>
@@ -238,7 +238,7 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
 
 <section class="card">
   <h2>Extraction checks</h2>
-  <p class="sub">Snapshot research mode: prices are candidate fields, exchange timestamps and independent candle feeds are not yet verified. Local bars use receipt times, not exchange prints.</p>
+  <p class="sub">Native mode: independent quote and candle streams; receipt freshness is shown separately from exchange time. Legacy snapshot mode uses local samples.</p>
   <div class="scroll"><table id="checks"></table></div>
 </section>
 
@@ -253,13 +253,13 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
 
 <section class="card">
   <h2>Return correlation</h2>
-  <p class="sub">Experimental Pearson correlation of aligned locally sampled 1-minute log returns. At least 10 overlapping completed returns required; not a predictive signal.</p>
+  <p class="sub">Pearson correlation of aligned completed 1-minute log returns. At least 10 overlapping completed returns required; not a predictive signal.</p>
   <div class="chart-wrap" id="corr-wrap"><div class="tip" id="corr-tip"></div></div>
 </section>
 
 <section class="card">
   <h2 id="detail-title">Detail</h2>
-  <p class="sub">Locally sampled price candles; exchange volume is unavailable. Up bars are hollow and down bars filled, so direction
+  <p class="sub">Native OHLCV candles and provider-reported volume when supplied; legacy mode has sample candles only. Up bars are hollow and down bars filled, so direction
     reads without relying on colour.</p>
   <div class="filters" style="margin-bottom:10px" id="detail-picker"></div>
   <div class="filters" style="margin-bottom:12px">
@@ -284,7 +284,7 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
   <div class="scroll" style="margin-top:16px"><table id="corr-table"></table></div>
 </section>
 
-<p class="foot">Times shown in your local timezone. Data via TakeProfit; experimental snapshots, not verified exchange ticks or Kalshi settlement. Changes use candidate session values when available, otherwise since first observation.</p>
+<p class="foot">Times shown in your local timezone. Data via TakeProfit. Provider volume units vary by instrument. This is not the Kalshi settlement reference.</p>
 
 <script>
 "use strict";
@@ -358,13 +358,15 @@ function aggregate(bars, seconds) {
   for (const b of bars) {
     const bucket = Math.floor(b.t / seconds) * seconds;
     if (cell === null || cell.t !== bucket) {
-      cell = { t: bucket, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v ?? null, closed: true };
+      cell = { t: bucket, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v ?? null, value: b.value ?? null, closed: b.closed };
       out.push(cell);
     } else {
       cell.h = Math.max(cell.h, b.h);
       cell.l = Math.min(cell.l, b.l);
       cell.c = b.c;
       cell.v = cell.v == null || b.v == null ? null : cell.v + b.v;
+      cell.value = cell.value == null || b.value == null ? null : cell.value + b.value;
+      cell.closed = cell.closed && b.closed;
     }
   }
   if (out.length) out[out.length - 1].closed = false;   // trailing bucket still filling
@@ -470,7 +472,7 @@ function renderTiles(payload) {
   host.innerHTML = payload.instruments.map((inst) => {
     const color = seriesColor(inst.slot);
     const spark = sparkline(inst, color);
-    const mode = "unverified snapshot";
+    const mode = inst.update_mode === "native_push" ? "native push" : "unverified snapshot";
     return `<article class="tile">
       <div class="tile-head">
         <span class="key" style="background:${color}"></span>
@@ -485,8 +487,8 @@ function renderTiles(payload) {
       ${spark}
       <div class="tile-foot">
         <span class="s-${inst.status}"><span class="icon">${ICONS[inst.status]}</span></span>
-        <span>${mode} · ${inst.change_basis === "candidate_session" ? "session?" : "since start"}</span>
-        <span style="margin-left:auto">${inst.ticks.toLocaleString()} samples</span>
+        <span>${mode} · ${inst.change_basis === "native_session" ? "session" : inst.change_basis === "candidate_session" ? "session?" : "since start"}</span>
+        <span style="margin-left:auto">${inst.ticks.toLocaleString()} updates</span>
       </div>
     </article>`;
   }).join("");
@@ -561,7 +563,7 @@ function renderIndexed() {
   // legend entry with no line and no explanation.
   const absent = scored.filter((s) => s.points.length <= 1).map((s) => s.inst.name);
   document.getElementById("idx-absent").textContent = absent.length
-    ? `No bars in this window: ${absent.join(", ")} — awaiting samples or unavailable.` : "";
+    ? `No bars in this window: ${absent.join(", ")} — awaiting history or unavailable.` : "";
 
   document.getElementById("idx-legend").innerHTML = FULL.instruments.map((inst) =>
     `<span data-pick="${inst.key}" title="Show ${escapeHtml(inst.name)} in detail below">
@@ -678,8 +680,8 @@ function spreadLabels(labels, minGap, top, bottom) {
 /** 30s candles have no backfill, so say so rather than looking broken. */
 function emptyNote() {
   return RES === "30s"
-    ? "Building 30-second candles from sampled quotes…"
-    : "Collecting local bars; no exchange history loaded yet…";
+    ? "No 30-second bars yet; native mode requires --native-30s."
+    : "Loading provider candle history or instrument unavailable…";
 }
 
 function timeTicks(t0, t1, count) {
@@ -945,7 +947,7 @@ function renderDetail() {
     let turnover = 0, volume = 0;
     const points = [];
     for (const b of bars) {
-      if (b.v) { turnover += ((b.h + b.l + b.c) / 3) * b.v; volume += b.v; }
+      if (b.v) { turnover += (b.value ?? ((b.h + b.l + b.c) / 3) * b.v); volume += b.v; }
       if (volume) points.push([x(b.t), y(turnover / volume)]);
     }
     if (points.length > 1) {
@@ -1084,7 +1086,7 @@ function renderDetailStats(inst, bars) {
     ["Range", fmt(hi.h - lo.l, d)],
     // Index feeds such as VIX carry no volume, so these stay blank by design.
     ["Volume", volume ? compact(volume) : "—"],
-    ["VWAP", vwap === null ? "—" : fmt(vwap, d)],
+    ["VWAP (window)", vwap === null ? "—" : fmt(vwap, d)],
     ["Bid", inst.bid ? fmt(inst.bid, d) : "—"],
     ["Ask", inst.ask ? fmt(inst.ask, d) : "—"],
     ["Spread", spread === null ? "—" : spread.toFixed(1) + " bps"],
@@ -1141,13 +1143,17 @@ function renderLive() {
   if (!LIVE) return;
   renderTiles(LIVE);
   renderChecks(LIVE);
-  document.getElementById("conn-dot").style.background = css(LIVE.connected ? "--warning" : "--critical");
-  document.getElementById("conn-text").textContent = LIVE.connected ? "receiving snapshots" : (LIVE.reason || "no upstream data");
+  const native = LIVE.mode === "native_push";
+  document.getElementById("conn-dot").style.background = css(LIVE.connected ? (native ? "--good" : "--warning") : "--critical");
+  document.getElementById("conn-text").textContent = LIVE.connected ? (native ? "native streams" : "receiving snapshots") : (LIVE.reason || "no upstream data");
+  const microButton = document.querySelector('[data-res="30s"]');
+  if (microButton) microButton.disabled = native && !LIVE.micro_enabled;
+  if (native && !LIVE.micro_enabled && RES === "30s") { RES = "1m"; document.querySelectorAll("[data-res]").forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.res===RES))); }
   const worst = LIVE.instruments.some((i) => i.status === "critical") ? "critical"
     : LIVE.instruments.some((i) => i.status === "serious") ? "serious"
     : LIVE.instruments.some((i) => i.status === "warning") ? "warning" : "good";
   document.getElementById("meta").textContent =
-    `${LIVE.instruments.length} instruments · up ${Math.floor(LIVE.uptime_seconds / 60)}m ` +
+    `${LIVE.instruments.length} instruments${native ? ` · history ${LIVE.history_ready}/${LIVE.instruments.length}` : ""} · up ${Math.floor(LIVE.uptime_seconds / 60)}m ` +
     `· ${LIVE.generated_utc.replace("T", " ").replace("+00:00", "")} UTC · checks: ${worst}`;
   if (SHOW_TABLE) renderTables();
 }
@@ -1197,7 +1203,7 @@ document.querySelectorAll("[data-res]").forEach((button) => {
     document.querySelectorAll("[data-res]").forEach((b) =>
       b.setAttribute("aria-pressed", String(b === button)));
     // 30s candles only ever hold minutes of data; pull the window in to match.
-    if (RES === "30s" && WINDOW_MIN > 30) selectWindow(15);
+    if (RES === "30s" && WINDOW_MIN > 30 && !(LIVE && LIVE.micro_enabled)) selectWindow(15);
     setZoom(null);
   });
 });
