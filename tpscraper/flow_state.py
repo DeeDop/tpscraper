@@ -17,6 +17,7 @@ class OrderBook:
         self.bids={}; self.asks={}; self.version=None; self.timestamp=None
         self.received=None; self.synced=False; self.cached=None; self.computed=0.0
         self.changes=deque(maxlen=6000)
+        self.started=None
 
     def apply(self,row,now):
         v=row.get("version")
@@ -32,10 +33,11 @@ class OrderBook:
         for dest,key,side in ((self.bids,"bid_levels","bid"),(self.asks,"ask_levels","ask")):
             for level in row[key]:
                 p,q=level["price"],level["size"]
-                # The captured client decimal conversion maps an omitted size to 0;
-                # its order-book storage removes zero-size levels.
+                # Omitted quantities have not been validated against live deltas.
+                # Never silently delete a price level based on an unknown size.
                 if q is None:
-                    q=0.0
+                    self.reset()
+                    raise BookGap("unknown level quantity")
                 if row["kind"]=="update":
                     delta=q-dest.get(p,0.0)
                     changes[side+("_added" if delta>=0 else "_removed")]+=abs(delta)
@@ -45,6 +47,8 @@ class OrderBook:
                     dest[p]=q
         if row["kind"]=="update":
             self.changes.append((now,changes))
+        if self.started is None:
+            self.started=now
         self.version=v
         self.timestamp=row.get("time")
         self.received=now
@@ -60,7 +64,15 @@ class OrderBook:
             out["fresh"]=False
             return out
         # Full depth is maintained, but only bounded levels/features leave the API.
-        if self.cached is None or now-self.computed>=0.5:
+        # Best prices must follow the current book, not the cached depth statistics.
+        best_bid=max(self.bids)
+        best_ask=min(self.asks)
+        if best_bid>=best_ask:
+            self.cached=None
+            out["fresh"]=False
+            out["crossed"]=True
+            return out
+        if self.cached is None or now-self.computed>=0.5 or self.cached["bid"]!=best_bid or self.cached["ask"]!=best_ask:
             bids=heapq.nlargest(depth,self.bids.items())
             asks=heapq.nsmallest(depth,self.asks.items())
             bid,ask=bids[0][0],asks[0][0]
@@ -79,10 +91,12 @@ class OrderBook:
             walls={side:sorted(rows,key=lambda p:p[1],reverse=True)[:3] for side,rows in (("bids",bids),("asks",asks))}
             changes={k:sum(c[k] for t,c in self.changes if t>=now-15) for k in ("bid_added","bid_removed","ask_added","ask_removed")}
             self.cached=dict(bid=bid,ask=ask,spread=ask-bid,mid=mid,walls_top20=walls,depth_changes_15s=changes,
+                             depth_changes_complete=bool(self.started is not None and now-self.started>=15 and (len(self.changes)<self.changes.maxlen or self.changes[0][0]<=now-15)),
                              bids=bids[:depth],asks=asks[:depth],imbalance=im,
                              feature_version=self.version,feature_timestamp=self.timestamp)
             self.computed=now
         out.update(self.cached)
+        out["feature_age_s"]=None if self.cached["feature_timestamp"] is None else now-self.cached["feature_timestamp"]
         return out
 
 class FlowState:
@@ -108,6 +122,7 @@ class FlowState:
     def status(self,kind,reason):
         with self.lock:
             self.states[kind]=reason
+            self.received.pop(kind,None)
             if kind=="orderbook":
                 self.book.reset()
             if kind=="trades":
@@ -126,10 +141,11 @@ class FlowState:
         if not rows:
             return
         with self.lock:
+            accepted=False
             for r in rows:
                 if kind=="trades":
                     t=r.get("time")
-                    if t is None or not now-300<=t<=now+2:
+                    if t is None or not now-300<=t<=now+2 or not math.isfinite(r["price"]) or r["price"]<=0 or not math.isfinite(r["quantity"]) or r["quantity"]<0:
                         continue
                     ident=r.get("trade_id")
                     if ident is not None:
@@ -147,9 +163,11 @@ class FlowState:
                         self.trade_evicted_at=now
                     self.trades.append(dict(r,received_epoch=now))
                     self.latencies.append(now-t)
+                    accepted=True
                 elif kind=="orderbook":
                     try:
                         self.book.apply(r,now)
+                        accepted=True
                     except BookGap:
                         self.version_gaps+=1
                         self.states[kind]="resynchronizing"
@@ -158,44 +176,35 @@ class FlowState:
                     t=r.get("start")
                     if t is not None and r.get("end") is not None:
                         self.profiles[t]=dict(r)
+                        accepted=True
                         for key in sorted(self.profiles)[:-120]:
                             del self.profiles[key]
                 elif kind=="heatmap":
                     t=r.get("time")
                     if t is not None:
                         self.heat[t]=dict(r)
+                        accepted=True
                         for key in sorted(self.heat)[:-120]:
                             del self.heat[key]
                 elif kind=="tpo":
                     if r["kind"]=="profile":
                         self.tpo=dict(r)
+                        self.tpo["rows_verified"]=True
+                        accepted=True
                         self.tpo["levels"]=[dict(x) for x in r.get("levels",[])]
                         self.tpo["block_infos"]=list(r.get("block_infos",[]))
                     elif self.tpo and r.get("start")==self.tpo.get("start"):
                         self.tpo.update({k:v for k,v in r.items() if k not in ("kind","row_diffs","block_appends")})
-                        levels={x["price"]:dict(x) for x in self.tpo.get("levels",[]) if x["price"] is not None}
-                        for diff in r.get("row_diffs",[]):
-                            if diff["price"] is None:
-                                continue
-                            level=levels.setdefault(diff["price"],dict(price=diff["price"],block_indexes=[],sell_volume=None,buy_volume=None))
-                            level["block_indexes"]=sorted(set(level["block_indexes"])|set(diff["block_indexes"]))
-                            for key in ("sell_volume","buy_volume"):
-                                if diff[key] is not None:
-                                    level[key]=(level[key] or 0)+diff[key]
-                        self.tpo["levels"]=sorted(levels.values(),key=lambda x:x["price"])
-                        infos=list(self.tpo.get("block_infos",[]))
-                        for a in r.get("block_appends",[]):
-                            index=a["index"]
-                            if index+len(a["offsets"])>10000:
-                                raise ValueError("TPO block index too large")
-                            if len(infos)<index+len(a["offsets"]):
-                                infos.extend([None]*(index+len(a["offsets"])-len(infos)))
-                            infos[index:index+len(a["offsets"])]=a["offsets"]
-                        self.tpo["block_infos"]=infos
-                        self.tpo["price_rows"]=len(levels)
-                        self.tpo["blocks"]=len(infos)
-            self.states[kind]="receiving"
-            self.received[kind]=now
+                        accepted=True
+                        # Row diff accumulation is not live-verified. Do not expose speculative levels.
+                        self.tpo["rows_verified"]=False
+                        self.tpo["levels"]=[]
+                        self.tpo["block_infos"]=[]
+                        continue
+            if accepted:
+                self.states[kind]="receiving"
+                self.received[kind]=now
+            return accepted
 
     def snapshot(self,now=None,details=False):
         now=time.time() if now is None else now
@@ -207,7 +216,7 @@ class FlowState:
                 streams[k]=dict(status=freshness,connection_status=v,receipt_age_s=age)
             while self.trades and self.trades[0]["time"]<now-120:
                 self.trades.popleft()
-            recent=[r for r in self.trades if now-60<=r["time"]<=now+2]
+            recent=sorted((r for r in self.trades if now-60<=r["time"]<=now+2),key=lambda r:r["time"])
             newest=max(recent,key=lambda r:(r["time"],r["received_epoch"]),default=None)
             latest=newest["time"] if newest else None
             trade_price=None
@@ -220,7 +229,7 @@ class FlowState:
                          p95_ms=lag[max(0,math.ceil(.95*len(lag))-1)]*1000 if lag else None,
                          max_ms=lag[-1]*1000 if lag else None)
             qties=sorted(r["quantity"] for r in recent if r["quantity"]>0)
-            large_threshold=qties[max(0,math.ceil(.95*len(qties))-1)] if len(qties)>=30 else None
+            large_threshold=qties[max(0,math.ceil(.95*len(qties))-1)] if len(qties)>=30 and self.units!="tick_activity" and qties[0]!=qties[-1] else None
             large=[r for r in recent if large_threshold is not None and r["quantity"]>=large_threshold]
             oi=next((r["open_interest"] for r in reversed(recent) if r.get("open_interest") is not None),None)
             windows={}
@@ -230,9 +239,9 @@ class FlowState:
                 sell=sum(r["quantity"] for r in rows if r["side"]=="sell")
                 unknown=sum(r["quantity"] for r in rows if r["side"]=="unknown")
                 complete=self.trade_started is not None and now-self.trade_started>=seconds and (self.trade_evicted_at is None or now-self.trade_evicted_at>=seconds)
-                fresh=latest is not None and -2<=now-latest<=5 and self.states.get("trades")=="receiving"
+                fresh=bool(trade_price and trade_price["fresh"])
                 windows[str(seconds)]=dict(count=len(rows),buy_volume=buy,sell_volume=sell,unknown_volume=unknown,
-                    delta=buy-sell,imbalance=(buy-sell)/(buy+sell) if buy+sell else None,
+                    delta=buy-sell if rows else None,imbalance=(buy-sell)/(buy+sell) if buy+sell else None,
                     largest_quantity=max((r["quantity"] for r in rows),default=None),
                     price_change=rows[-1]["price"]-rows[0]["price"] if len(rows)>=2 else None,
                     complete=bool(complete and fresh),fresh=bool(fresh))
@@ -244,6 +253,10 @@ class FlowState:
             profile_fresh=bool(profile and profile["start"]<=now<profile["end"] and
                 self.states.get("footprint")=="receiving" and now-self.received.get("footprint",0)<=5)
             book=self.book.summary(now)
+            if "orderbook" in streams and not book["fresh"] and streams["orderbook"]["status"]=="live":
+                streams["orderbook"]["status"]="stale_or_unsynchronized"
+            if "trades" in streams and not (trade_price and trade_price["fresh"]) and streams["trades"]["status"]=="live":
+                streams["trades"]["status"]="stale_event_time"
             out=dict(symbol=self.symbol,quantity_semantics=self.units,streams=streams,trade_windows=windows,
                      latest_trade_timestamp=latest,latest_trade=trade_price,latency=latency,
                      open_interest=oi,large_trade_threshold=large_threshold,large_trade_count=len(large),
