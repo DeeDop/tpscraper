@@ -59,7 +59,18 @@ py -m tpscraper.credential_store clear
 
 Clear removes the local saved token, not the server-side session.
 
-### Paired Chrome automatic renewal
+### Extension-free dedicated Chrome renewal (new, optional)
+
+```powershell
+py -m pip install -r requirements-browser.txt
+py -m tpscraper dashboard --watchlist btc --remember --orderflow --authorized --browser-renew
+```
+
+Approve the terminal consent prompt. The first run opens a dedicated installed Chrome profile under `%LOCALAPPDATA%\\tpscraper\\browser-auth\\chrome-profile`; sign in normally and press Enter. Keep that window open. Subsequent runs ask consent again and reuse that dedicated browser's normal sign-in session, not the regular Chrome profile. Add `--browser-login` to explicitly sign in again if needed. The session makes only the authorized first-party token request; it does not read or export cookies, inspect unrelated network traffic, or request passwords. `--remember` still uses Windows DPAPI for access-token storage. Browser sign-in state is managed separately by Chrome. Close the dedicated browser and sign out to revoke its session; the collector stops on provider refusal. No extension or pairing code is required. The existing `--auto-renew` extension mode is retained for compatibility; the two modes are mutually exclusive.
+
+Dedicated Chrome requests replacement authorization while existing upstream streams are active, then rotates the connection generation. There may still be a data gap while old connections close and history/flow initializes again. New authorization must have a later expiration. The new browser mode has not yet been verified against a live signed-in session or expiration cycle.
+
+### Paired Chrome automatic renewal (legacy)
 
 1. Open `chrome://extensions/` in the signed-in regular Chrome profile.
 2. Enable Developer mode and select **Load unpacked**.
@@ -108,6 +119,16 @@ py -m tpscraper dashboard --watchlist crypto15 --remember --orderflow --authoriz
 ```
 
 The `crypto15` preset preserves stable keys `btc`, `eth`, `sol`, `xrp`, `doge`, `bnb`, `hype`, `near`, `zec`. It uses Binance spot USDT pairs (including the catalog-listed HYPE/USDT candidate). These are research proxies for the requested market list, not an automatically synchronized list of active Kalshi contracts. Only BTC spot advanced services have been verified in the earlier individual crypto probes.
+
+### Saved workspace from the dashboard
+
+Use **+ Manage tickers** at the top of the dashboard. Load a Kalshi research preset, import active tickers, search by name/symbol/provider, or add an exact pair. Remove pairs by clicking their chips. Save workspace stores up to 12 unique validated pairs locally; known research symbols retain stable predictor keys. Restart with:
+
+```powershell
+py -m tpscraper dashboard --workspace --watchlist btc --remember --orderflow --authorized --browser-renew
+```
+
+`--workspace` loads the saved list (or the chosen preset if no saved list exists). It is mutually exclusive with `--ticker`. Saving does not interrupt active streams; application requires a restart. The workspace is not a live Kalshi series discovery service.
 
 ## Instrument discovery
 
@@ -255,7 +276,10 @@ Optional SQLite WAL journal of compact feature and quote snapshots approximately
 | --flow-budget N | Maximum active advanced streams, 1–60; default 5 per ticker |
 | --refresh-capabilities | Retest cached negatives once |
 | --remember | Windows DPAPI token storage |
-| --auto-renew | Paired Chrome extension |
+| --auto-renew | Legacy paired Chrome extension |
+| --browser-renew | Optional extension-free dedicated Chrome renewal |
+| --browser-login | Explicit sign-in again with --browser-renew |
+| --workspace | Load the watchlist saved in the dashboard |
 | --record-flow PATH | SQLite feature journal |
 | --port N | 8789 default |
 | --no-browser | Don't open dashboard |
@@ -307,6 +331,17 @@ A subsequent BTC-only live check on November 24 confirmed connected native push,
 
 ## Reliability and acceptance checks
 
+The dashboard includes a live reliability scorecard. Successful token rotations are counted separately from renewal attempts; an increment alone does not prove uninterrupted coverage. The Windows soak monitor samples local API health, per-stream diagnostics and the Python process CPU, private memory, working set, handles and threads. Run in a separate PowerShell window from the repository root:
+
+```powershell
+powershell -NoProfile -File .\\scripts\\soak.ps1 -Hours 6
+```
+
+The default output is `$env:USERPROFILE\\Downloads\\tpscraper_soak.jsonl`. Use `-Hours 0` for monitoring until Ctrl+C and `-Output` for a unique output file. CPU percentage is normalized across logical processors; Chrome/Playwright child processes are not included. Sample intervals do not establish continuous lossless coverage. Briefly disconnect/reconnect the network during the run and verify timestamped prices become ineligible during the outage and resume after recovery; check the stream counters and historical gaps. Do not disconnect while using the engine for real-money decisions. The monitor does not intentionally interrupt network access or change system settings.
+
+The user reported a rolling sample of 4,096 BTC trade events with median provider timestamp-to-receipt lag 129.74 ms, P95 275.51 ms, maximum 464.62 ms and zero detected book gaps. Earlier an individual event showed negative arrival lag; the user's later clock check against Microsoft's time service was within 20 ms. These measurements are not independent exchange latency verification. No hardcoded clock-offset correction is applied.
+
+
 - Stream recovery uses capped exponential backoff (up to 120 seconds) with jitter. Successful sustained streams reset the failure backoff. Worker shutdown must complete before a new credential generation starts; an incomplete shutdown stops collection rather than allowing overlapping writers.
 - Duplicate or rejected trade messages do not renew the receipt-freshness clock. Timestamped prices remain separate from raw quotes. Best bid/ask are checked against the current synchronized book even within the cached depth-feature interval.
 - A reconnect clears the candle history-ready marker until the provider's initial history marker arrives again. Existing historical bars are retained; `missing_bar_intervals` measures gaps in the observed timeline, including legitimate closed-market periods. `bar_receipt_age_s` is receipt age, not proof of exchange latency. No market-hours calendar is assumed.
@@ -330,3 +365,5 @@ Update this README whenever CLI flags, API fields, feed semantics, or validation
 - Added independent timestamped live trade price, arrival-age metrics, explicit nullable spread/volume/VWAP, and ~250ms local SSE delivery.
 
 - Reliability hardening: independent feature refusal handling, expiring capability rechecks, jittered reconnects, bounded shutdown, accepted-record counters, current-book checks, timestamp freshness guards, candle readiness invalidation, cached bar statistics, verified worker merge conventions, and offline CI coverage.
+
+- Added optional consent-based dedicated Chrome renewal, workspace management, stable saved ticker keys, live reliability scorecard, Windows soak monitor, and offline browser/workspace tests. Live dedicated-browser renewal and soak acceptance remain pending.
