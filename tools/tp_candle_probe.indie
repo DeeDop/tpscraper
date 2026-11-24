@@ -1,0 +1,16 @@
+# indie:lang_version = 5
+from indie import indicator, plot, color
+
+@indicator('TP Probe 1 - OHLCV')
+@plot.line(title='Open', color=color.GRAY)
+@plot.line(title='High', color=color.GREEN)
+@plot.line(title='Low', color=color.RED)
+@plot.line(title='Close', color=color.BLUE)
+@plot.columns(title='Volume')
+@plot.line(title='Bar timestamp')
+@plot.line(title='Realtime flag')
+@plot.line(title='Closed flag')
+def Main(self):
+    live = 1.0 if self.is_realtime else 0.0
+    closed = 1.0 if self.is_closed_bar else 0.0
+    return self.open[0], self.high[0], self.low[0], self.close[0], self.volume[0], self.time[0], live, closed
