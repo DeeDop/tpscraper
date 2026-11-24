@@ -71,6 +71,7 @@ def main():
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--session", action="store_true", help="Use existing experimental session renewal, if permitted")
     mode.add_argument("--browser", action="store_true", help="Opt-in isolated Chrome authorization, if permitted")
+    mode.add_argument("--local-chrome", action="store_true", help="Use regular installed Chrome with explicit local authorization handoff")
     args = parser.parse_args()
     if not 15 <= args.interval <= 3600 or not 0 <= args.count <= 100000:
         parser.error("interval must be 15–3600 seconds and count must be nonnegative")
@@ -78,7 +79,10 @@ def main():
     try:
         print("TPSCRAPER | QUOTE MONITOR", flush=True)
         print("Snapshot polling; not push streaming. Prices are unverified.", flush=True)
-        if args.browser:
+        if args.local_chrome:
+            from .local_chrome import LocalChromeAuth
+            auth = LocalChromeAuth()
+        elif args.browser:
             from .browser_auth import BrowserAuth
             auth = BrowserAuth()
         else:
