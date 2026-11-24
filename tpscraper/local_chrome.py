@@ -13,6 +13,7 @@ import time
 from getpass import getpass
 
 from .auth import AuthError, checked, expires_at
+from .credential_store import StoreError
 
 TOKEN_URL = "https://takeprofit.com/api/auth/token"
 JWT = re.compile(r"[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
@@ -29,9 +30,15 @@ def chrome_path():
     raise AuthError("Installed Chrome not found. Open the TakeProfit token page manually or use manual token mode.")
 
 
-def open_chrome():
+def open_chrome(profile=None):
     try:
-        subprocess.Popen([chrome_path(), TOKEN_URL], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        args = [chrome_path()]
+        if profile is not None:
+            if not re.fullmatch(r"Default|Profile [0-9]+", profile):
+                raise AuthError("Choose Default or Profile N for an existing Chrome profile.")
+            args.append("--profile-directory=" + profile)
+        args.append(TOKEN_URL)
+        subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except OSError:
         raise AuthError("Could not open installed Chrome.") from None
 
@@ -74,7 +81,7 @@ def parse_access(raw):
 
 
 class LocalChromeAuth:
-    def __init__(self, ask=input, emit=print, opener=open_chrome, clipboard=read_clipboard, hidden=getpass):
+    def __init__(self, ask=input, emit=print, opener=open_chrome, clipboard=read_clipboard, hidden=getpass, store=None):
         self.ask = ask
         self.emit = emit
         self.opener = opener
@@ -82,6 +89,8 @@ class LocalChromeAuth:
         self.hidden = hidden
         self._access = None
         self.renewals = 0
+        self.store = store
+        self._restore_attempted = False
 
     def refresh(self):
         self._access = None
@@ -99,10 +108,29 @@ class LocalChromeAuth:
             raise AuthError("Authorization cancelled")
         self._access = parse_access(raw)
         self.renewals += 1
+        if self.store is not None:
+            try:
+                self.store.save(self._access)
+                self.emit("Saved access token encrypted under your Windows user account.")
+            except StoreError as exc:
+                self.emit(str(exc) + " Continuing in memory only.")
         self.emit("Authorization loaded into memory. Consider clearing the copied credential from your clipboard.")
         return self._access
 
     def headers(self):
+        if self.store is not None and not self._restore_attempted:
+            self._restore_attempted = True
+            try:
+                saved = self.store.load()
+                if saved:
+                    try:
+                        self._access = parse_access(saved)
+                        self.emit("Using a valid saved local access token.")
+                    except AuthError:
+                        self.store.clear()
+                        self.emit("Saved access token expired or invalid; authorization needed.")
+            except StoreError as exc:
+                self.emit(str(exc) + " Continuing with fresh authorization.")
         expiry = expires_at(self._access) if self._access else None
         if not self._access or expiry is None or expiry <= time.time()+45:
             self.refresh()
