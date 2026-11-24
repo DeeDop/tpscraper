@@ -5,17 +5,20 @@ import time
 from statistics import correlation, stdev
 from .dashboard_state import utc, returns
 from .flow_state import FlowState
+from .capabilities import CapabilityCache
 
 
 class NativeDashboardState:
-    def __init__(self,instruments,history=360,micro=False,orderflow=False,recorder=None):
+    def __init__(self,instruments,history=360,micro=False,orderflow=False,recorder=None,flow_budget=24,refresh_capabilities=False):
         self.instruments=tuple(instruments)
         self.history=history
         self.micro=micro
         self.lock=threading.RLock()
         self.started=time.monotonic()
-        verified={'CXBNCE:BTC/USDT','CXBNF8:XAU/USDT.P','FXPPST:XAU/USD'}
-        self.flows={i.key:FlowState(i.symbol) for i in instruments if orderflow and i.symbol in verified}
+        self.flows={i.key:FlowState(i.symbol) for i in instruments if orderflow}
+        self.capabilities=CapabilityCache() if orderflow else None
+        self.flow_budget=flow_budget
+        self.refresh_capabilities=refresh_capabilities
         self.recorder=recorder
         self.running=True
         self.reason="connecting native streams"
