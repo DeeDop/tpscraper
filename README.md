@@ -48,3 +48,7 @@ Loopback port 8789: /api/quotes, /api/snapshot, /api/health and /api/stream. The
 ## Security
 
 Never commit cookies, tokens, HAR files, raw network captures or account information. Share only probe_result.json, which contains bounded diagnostics and candidate prices, not credentials or raw response bytes.
+
+## Regular Chrome console
+
+Run `py -m tpscraper.console --local-chrome` on Windows. Approve opening your normal Chrome window. Copy the successful JSON response (or accessToken) on the first-party token page, then select `c` to explicitly permit a one-time local clipboard read, or `p` to paste the token into a hidden prompt. Renewal repeats this consent flow. No existing Chrome profile files or cookies are extracted, and Playwright is not required. The token remains in memory; clear the copied credential from the clipboard after use. Use only if permitted by the provider. The feed is polling and price semantics are not yet verified.
