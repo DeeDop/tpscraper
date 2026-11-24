@@ -194,10 +194,28 @@ class NativeDashboardState:
                     bid=item['bid'],ask=item['ask'],spread=(item['ask']-item['bid']) if item['ask'] is not None and item['bid'] is not None else None,
                     volume=item['volume'],turnover=item['turnover'],history_vwap=item['history_vwap'],history_vwap_bars=item['history_vwap_bars'],
                     volume_semantics='tick_activity' if i.symbol.startswith(('FXPPST:','FXEXTS:')) else 'provider_reported')
+            for q in quotes.values():
+                q.update(live_price=q["last"] if q["usable_short_term"] else None,
+                         live_price_source="timestamped_quote" if q["usable_short_term"] else None,
+                         live_price_event_utc=q["exchange_utc"] if q["usable_short_term"] else None,
+                         live_price_age_s=q["price_age_s"] if q["usable_short_term"] else None,
+                         live_price_received_utc=q["received_utc"] if q["usable_short_term"] else None,
+                         live_price_usable=q["usable_short_term"],live_price_arrival_lag_s=None)
             for k,f in flow.items():
                 quotes[k]['orderflow']=f
+                t=f.get('latest_trade')
+                q=quotes[k]
+                if self.running and t and t['fresh'] and (not q['live_price_usable'] or t['event_age_s']<q['live_price_age_s']):
+                    q.update(live_price=t['price'],live_price_source='timestamped_trade_event',
+                             live_price_event_utc=utc(t['event_epoch']),live_price_age_s=t['event_age_s'],
+                             live_price_received_utc=utc(t['received_epoch']),live_price_usable=True,
+                             live_price_arrival_lag_s=t['arrival_lag_s'])
                 if f['book']['fresh']:
                     quotes[k].update(bid=f['book']['bid'],ask=f['book']['ask'])
+            for i in instruments:
+                q=quotes[i["key"]]
+                i.update(live_price=q["live_price"],live_price_source=q["live_price_source"],
+                         live_price_age_s=q["live_price_age_s"],live_price_usable=q["live_price_usable"])
             payload=dict(instruments=instruments,quotes=quotes,orderflow=flow,connected=any(q["status"] in ("LIVE","UNVERIFIED") for q in quotes.values()),
                 mode="native_push",reason=self.reason,history_source="takeprofit_native",micro_enabled=self.micro,
                 history_ready=sum(i["history_ready"] for i in instruments),generated_utc=utc(now),
