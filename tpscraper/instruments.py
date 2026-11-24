@@ -1,5 +1,5 @@
 """TakeProfit equivalents of the TV watchlists. Candidate pairs are explicit."""
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Instrument:
@@ -36,5 +36,23 @@ MARKETS15 = GOLD + (
     Instrument("usdcad","FXPPST:USD/CAD","USD/CAD (candidate)","FX",2,5),
     Instrument("usdmxn","FXPPST:USD/MXN","USD/MXN","FX",3,5),
 )
+# Research proxies for the nine previously requested 15-minute crypto markets.
+# Binance HYPE/USDT appears in the captured catalog; no Hyperliquid pair is assumed.
+CRYPTO15 = tuple(Instrument(key,"CXBNCE:"+symbol,name,"Crypto",n+1,decimals)
+    for n,(key,symbol,name,decimals) in enumerate((
+        ("btc","BTC/USDT","Bitcoin",2),
+        ("eth","ETH/USDT","Ethereum",2),
+        ("sol","SOL/USDT","Solana",3),
+        ("xrp","XRP/USDT","XRP",5),
+        ("doge","DOGE/USDT","Dogecoin",6),
+        ("bnb","BNB/USDT","BNB",2),
+        ("hype","HYPE/USDT","Hyperliquid",3),
+        ("near","NEAR/USDT","NEAR",4),
+        ("zec","ZEC/USDT","Zcash",3),
+    )))
+BTC = (CRYPTO15[0],)
+BTC_DEPTH = BTC + (Instrument("btc_perp","CXBNF8:BTC/USDT.P","Bitcoin perpetual","Crypto",2,2),)
 WATCHLIST=REALTIME
-WATCHLISTS={"realtime":REALTIME,"gold":GOLD,"markets15":MARKETS15}
+WATCHLISTS={"realtime":REALTIME,"gold":GOLD,"markets15":MARKETS15,
+            "crypto15":CRYPTO15,"btc":BTC,"btc-depth":BTC_DEPTH}
+
