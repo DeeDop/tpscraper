@@ -59,16 +59,20 @@ py -m tpscraper.credential_store clear
 
 Clear removes the local saved token, not the server-side session.
 
-### Extension-free dedicated Chrome renewal (new, optional)
+### Extension-free renewal in your normal signed-in Chrome (Chrome 144+)
 
 ```powershell
 py -m pip install -r requirements-browser.txt
 py -m tpscraper dashboard --watchlist btc --remember --orderflow --authorized --browser-renew
 ```
 
-Approve the terminal consent prompt. The first run opens a dedicated installed Chrome profile under `%LOCALAPPDATA%\\tpscraper\\browser-auth\\chrome-profile`; sign in normally and press Enter. Keep that window open. Subsequent runs ask consent again and reuse that dedicated browser's normal sign-in session, not the regular Chrome profile. Add `--browser-login` to explicitly sign in again if needed. The session makes only the authorized first-party token request; it does not read or export cookies, inspect unrelated network traffic, or request passwords. `--remember` still uses Windows DPAPI for access-token storage. Browser sign-in state is managed separately by Chrome. Close the dedicated browser and sign out to revoke its session; the collector stops on provider refusal. No extension or pairing code is required. The existing `--auto-renew` extension mode is retained for compatibility; the two modes are mutually exclusive.
+Keep your ordinary signed-in Chrome open. Approve the terminal consent prompt. In that same browser open `chrome://inspect/#remote-debugging` and enable remote debugging for this browser instance. When the program connects, approve Chrome's native permission dialog. No new Chrome profile, extension, pairing code, browser security flags or sign-in copying is necessary.
 
-Dedicated Chrome requests replacement authorization while existing upstream streams are active, then rotates the connection generation. There may still be a data gap while old connections close and history/flow initializes again. New authorization must have a later expiration. The new browser mode has not yet been verified against a live signed-in session or expiration cycle.
+This uses Chrome's documented [approval-based existing-browser connection](https://developer.chrome.com/docs/devtools/agents/use-cases/auto-connect). Chrome grants browser-wide debugging permission; this program limits its own authorization request to TakeProfit's first-party token endpoint. It does not read stored browser cookies, passwords, unrelated page content or authentication headers. It reads only the documented local DevTools endpoint locator from the standard Chrome user-data directory. It never logs the endpoint or token. The connected browser stays open when the scraper disconnects. Turn off remote debugging to revoke the connection. If Chrome rejects access or TakeProfit refuses authorization, the program stops rather than bypassing the refusal. Multiple browser contexts and nonstandard Chrome installations may require manual authorization. This new mode has not been tested against your actual signed-in Chrome.
+
+The old separate-profile mode remains optional using `--dedicated-browser-renew` (and `--browser-login` when needed). Manual handoff is available by omitting all renewal flags. The legacy extension mode is unchanged.
+
+The browser modes request replacement authorization before tearing down active streams; a later token expiration is required. Stream reconnection can still cause a gap. Long-duration renewal, network recovery and soak acceptance remain unverified.
 
 ### Paired Chrome automatic renewal (legacy)
 
@@ -277,8 +281,9 @@ Optional SQLite WAL journal of compact feature and quote snapshots approximately
 | --refresh-capabilities | Retest cached negatives once |
 | --remember | Windows DPAPI token storage |
 | --auto-renew | Legacy paired Chrome extension |
-| --browser-renew | Optional extension-free dedicated Chrome renewal |
-| --browser-login | Explicit sign-in again with --browser-renew |
+| --browser-renew | Existing signed-in Chrome; user-approved connection (144+) |
+| --dedicated-browser-renew | Optional separate Chrome profile |
+| --browser-login | Explicit sign-in again with --dedicated-browser-renew |
 | --workspace | Load the watchlist saved in the dashboard |
 | --record-flow PATH | SQLite feature journal |
 | --port N | 8789 default |
