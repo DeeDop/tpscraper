@@ -205,6 +205,35 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
 @media (max-width: 900px) { .grid-2 { grid-template-columns: minmax(0, 1fr); } }
 .hidden { display: none; }
 .foot { font-size: 11px; color: var(--text-muted); margin-top: 10px; }
+
+/* Responsive monitor: contain each chart/table, never widen the viewport. */
+body { padding: clamp(9px,1.5vw,24px); }
+.card, .grid-kpi, .chart-wrap, .filters { min-width:0; max-width:100%; }
+.card { padding:clamp(10px,1.2vw,16px); }
+.grid-kpi { grid-template-columns:repeat(auto-fit,minmax(min(100%,230px),1fr)); gap:10px; }
+.tile-head { flex-wrap:wrap; }
+.tile-sym { overflow-wrap:anywhere; }
+.tile-value { font-size:clamp(19px,2vw,28px); overflow-wrap:anywhere; font-variant-numeric:tabular-nums; }
+.tile-foot { flex-wrap:wrap; }
+.tile-spark { max-width:100%; }
+.chart-wrap { overflow-x:auto; }
+.scroll { max-width:100%; }
+.stats { grid-template-columns:repeat(auto-fit,minmax(min(100%,112px),1fr)); }
+.stat .v { white-space:normal; overflow-wrap:anywhere; }
+.flow-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,190px),1fr)); gap:8px; }
+.flow-metric { padding:10px; border:1px solid var(--border); border-radius:8px; min-width:0; }
+.flow-metric strong { display:block; font-size:17px; font-variant-numeric:tabular-nums; }
+.flow-metric small { color:var(--text-muted); }
+.flow-status { display:flex; flex-wrap:wrap; gap:6px; margin:10px 0; }
+.flow-status .pill { max-width:100%; overflow-wrap:anywhere; }
+.depth-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr)); gap:12px; margin-top:12px; }
+.tile-extra { display:flex; flex-wrap:wrap; gap:4px 10px; font-size:11px; color:var(--text-secondary); font-variant-numeric:tabular-nums; }
+@media(max-width:600px) {
+  header { gap:7px; }
+  .filters { gap:5px; padding:8px; }
+  .filters button { padding:5px 8px; }
+  .filters .spacer { display:none; }
+}
 </style>
 </head>
 <body>
@@ -253,7 +282,7 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
 
 <section class="card">
   <h2>Return correlation</h2>
-  <p class="sub">Pearson correlation of aligned completed 1-minute log returns. At least 10 overlapping completed returns required; not a predictive signal.</p>
+  <p class="sub">Pearson correlation of aligned completed 1-minute log returns. At least 30 overlapping completed returns required in native mode; not a predictive signal.</p>
   <div class="chart-wrap" id="corr-wrap"><div class="tip" id="corr-tip"></div></div>
 </section>
 
@@ -275,6 +304,15 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
   <p class="hint" id="detail-note"></p>
   <div class="stats" id="detail-stats"></div>
   <p class="hint">Drag to zoom · double-click to reset</p>
+</section>
+
+<section class="card hidden" id="flow-card">
+  <h2 id="flow-title">Live market depth &amp; order flow</h2>
+  <p class="sub" id="flow-note"></p>
+  <div id="flow-status" class="flow-status"></div>
+  <div id="flow-metrics" class="flow-grid"></div>
+  <div id="flow-depth" class="depth-grid"></div>
+  <p class="hint">Only observed data is displayed. Tick activity is not exchange-traded volume. No data or queued does not mean a provider has no such feed.</p>
 </section>
 
 <section class="card hidden" id="table-card">
@@ -369,7 +407,7 @@ function aggregate(bars, seconds) {
       cell.closed = cell.closed && b.closed;
     }
   }
-  if (out.length) out[out.length - 1].closed = false;   // trailing bucket still filling
+  if (out.length && out[out.length - 1].t + seconds > Date.now()/1000) out[out.length - 1].closed = false;
   return out;
 }
 
@@ -485,6 +523,7 @@ function renderTiles(payload) {
         ${signed(inst.change, inst.decimals)} (${signed(inst.change_pct, 2)}%)
       </div>
       ${spark}
+      <div class="tile-extra">${inst.volume != null ? `<span>Volume ${compact(inst.volume)}</span>` : ""}${inst.bid != null && inst.ask != null ? `<span>Bid ${fmt(inst.bid,inst.decimals)}</span><span>Ask ${fmt(inst.ask,inst.decimals)}</span><span>Spread ${fmt(inst.ask-inst.bid,inst.decimals)}</span>` : ""}</div>
       <div class="tile-foot">
         <span class="s-${inst.status}"><span class="icon">${ICONS[inst.status]}</span></span>
         <span>${mode} · ${inst.change_basis === "native_session" ? "session" : inst.change_basis === "candidate_session" ? "session?" : "since start"}</span>
@@ -758,7 +797,7 @@ function renderCorrelation() {
   const names = Object.fromEntries(FULL.instruments.map((i) => [i.key, i.name]));
   const size = corr.keys.length;
 
-  const width = Math.max(280, wrap.clientWidth);
+  const width = Math.max(280, 90 + 28 * size, wrap.clientWidth);
   const left = 74, top = 66, gap = 2;   // top clears the diagonal column headers
   const cell = Math.max(28, Math.min(64, (width - left - 8) / size));
   const height = top + cell * size + 8;
@@ -840,6 +879,7 @@ function renderDetail() {
 
   const inst = FULL.instruments.find((i) => i.key === SELECTED) || FULL.instruments[0];
   SELECTED = inst.key;
+  renderFlow();
   document.getElementById("detail-title").textContent = `${inst.name} · ${inst.symbol}`;
 
   const wrap = document.getElementById("detail-wrap");
@@ -1063,7 +1103,7 @@ function renderDetailStats(inst, bars) {
   for (const b of bars) {
     if (b.h > hi.h) hi = b;
     if (b.l < lo.l) lo = b;
-    if (b.v) { volume += b.v; turnover += ((b.h + b.l + b.c) / 3) * b.v; }
+    if (b.v) { volume += b.v; turnover += (b.value ?? ((b.h + b.l + b.c) / 3) * b.v); }
   }
   const change = last.c - first.o;
   const changePct = first.o ? (change / first.o) * 100 : null;
@@ -1086,7 +1126,7 @@ function renderDetailStats(inst, bars) {
     ["Range", fmt(hi.h - lo.l, d)],
     // Index feeds such as VIX carry no volume, so these stay blank by design.
     ["Volume", volume ? compact(volume) : "—"],
-    ["VWAP (window)", vwap === null ? "—" : fmt(vwap, d)],
+    [bars.some(b=>b.v && b.value==null) ? "VWAP (estimated)" : "VWAP (window)", vwap === null ? "—" : fmt(vwap, d)],
     ["Bid", inst.bid ? fmt(inst.bid, d) : "—"],
     ["Ask", inst.ask ? fmt(inst.ask, d) : "—"],
     ["Spread", spread === null ? "—" : spread.toFixed(1) + " bps"],
@@ -1139,10 +1179,63 @@ function renderTables() {
 
 /* --------------------------------------------------------------- wiring */
 
+
+function renderFlow() {
+  const card=document.getElementById("flow-card");
+  const inst=LIVE && (LIVE.instruments.find(i=>i.key===SELECTED) || LIVE.instruments[0]);
+  const f=inst && inst.flow;
+  card.classList.toggle("hidden", !f);
+  if(!f)return;
+  const d=inst.decimals;
+  document.getElementById("flow-title").textContent=inst.name+" · order flow";
+  document.getElementById("flow-note").textContent=f.quantity_semantics.replaceAll("_"," ")+" · independent feature freshness";
+  const label=s=>({live:"Live receipt",stale:"Stale",queued:"Queued / budget",connecting:"Connecting",reconnecting:"Reconnecting",no_data:"No data observed",cached_no_data:"No data (cached)",unsupported:"Unsupported",cached_unsupported:"Unsupported (cached)",unavailable:"Unavailable",cached_unavailable:"Unavailable (cached)"}[s]||s);
+  document.getElementById("flow-status").innerHTML=Object.entries(f.streams||{}).map(([k,v])=>{
+    const status=v.status||"queued";
+    const hue=status==="live"?"--good":/restricted|denied|restriction/i.test(status)?"--critical":/no_data|unsupported|unavailable/.test(status)?"--text-muted":"--warning";
+    return '<span class="pill"><span class="dot" style="background:'+css(hue)+'"></span>'+escapeHtml(k)+' · '+escapeHtml(label(status))+'</span>';
+  }).join("");
+  const items=[];
+  const add=(name,value,detail="")=>{if(value!=null)items.push([name,value,detail]);};
+  if(inst.volume!=null)add("Session volume",compact(inst.volume),"Provider units");
+  if(inst.turnover!=null)add("Session turnover",compact(inst.turnover),"Provider units");
+  const b=f.book||{};
+  if(b.fresh && b.bid!=null && b.ask!=null) {
+    add("Best bid",fmt(b.bid,d)); add("Best ask",fmt(b.ask,d));
+    add("Spread",fmt(b.spread,d)); add("Midpoint",fmt(b.mid,d));
+    add("Depth levels",fmt(b.bid_levels+b.ask_levels,0),"Synchronized book");
+    for(const [bps,row] of Object.entries(b.imbalance||{})){
+      if(row.imbalance!=null)add(bps+" bps imbalance",signed(row.imbalance*100,1)+"%","Positive = bid-heavy");
+    }
+  }
+  for(const [secs,w] of Object.entries(f.trade_windows||{})) {
+    if(!w.fresh || !w.count)continue;
+    add(secs+"s trade delta",signed(w.delta,3),(w.complete?"Full window":"Warming up")+" · "+w.count+" events");
+    add(secs+"s buy / sell",compact(w.buy_volume)+" / "+compact(w.sell_volume));
+  }
+  const fp=f.footprint||{};
+  if(fp.fresh && fp.latest) {
+    add("Footprint buy / sell",compact(fp.latest.buy_volume)+" / "+compact(fp.latest.sell_volume),"Current candle");
+    if(fp.latest.delta!=null)add("Footprint delta",signed(fp.latest.delta,3));
+  }
+  if(fp.fresh && fp.closed_window_cvd!=null)add("Observed CVD",signed(fp.closed_window_cvd,3),fp.closed_profiles+" closed profiles");
+  const t=f.tpo||{};
+  if(f.streams?.tpo?.status==="live") {
+    if(t.poc!=null)add("TPO POC",fmt(t.poc,d));
+    if(t.initial_balance_high!=null)add("Initial balance high",fmt(t.initial_balance_high,d));
+    if(t.initial_balance_low!=null)add("Initial balance low",fmt(t.initial_balance_low,d));
+  }
+  if(f.streams?.heatmap?.status==="live" && f.heatmap?.buckets)add("Heatmap buckets",fmt(f.heatmap.buckets,0));
+  document.getElementById("flow-metrics").innerHTML=items.map(([k,v,n])=>'<div class="flow-metric"><small>'+escapeHtml(k)+'</small><strong>'+escapeHtml(v)+'</strong><small>'+escapeHtml(n)+'</small></div>').join("");
+  const depth=(title,rows,cls)=>'<div><h2 class="'+cls+'">'+title+'</h2><div class="scroll"><table><thead><tr><th>Price</th><th>Size</th></tr></thead><tbody>'+rows.slice(0,10).map(([p,q])=>'<tr><td>'+fmt(p,d)+'</td><td>'+compact(q)+'</td></tr>').join("")+'</tbody></table></div></div>';
+  document.getElementById("flow-depth").innerHTML=b.fresh && b.bids?.length && b.asks?.length ? depth("Bids",b.bids,"up")+depth("Asks",b.asks,"down") : "";
+}
+
 function renderLive() {
   if (!LIVE) return;
   renderTiles(LIVE);
   renderChecks(LIVE);
+  renderFlow();
   const native = LIVE.mode === "native_push";
   document.getElementById("conn-dot").style.background = css(LIVE.connected ? (native ? "--good" : "--warning") : "--critical");
   document.getElementById("conn-text").textContent = LIVE.connected ? (native ? "native streams" : "receiving snapshots") : (LIVE.reason || "no upstream data");
