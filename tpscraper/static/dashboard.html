@@ -234,7 +234,7 @@ body { padding: clamp(9px,1.5vw,24px); }
   .filters button { padding:5px 8px; }
   .filters .spacer { display:none; }
 }
-</style>
+.flow-viz { margin-top:14px; min-width:0; } .flow-viz svg { display:block; max-width:100%; height:auto; } .flow-viz th,.flow-viz td{padding:4px 7px} input,textarea{background:var(--plane);color:var(--text-primary);border:1px solid var(--border);border-radius:6px;padding:8px;font:inherit;max-width:100%} #catalog-results tbody{font-size:12px} .pressure-track{height:10px;background:var(--wash);display:flex;border-radius:5px;overflow:hidden;margin:6px 0} .pressure-buy{background:var(--delta-up)} .pressure-sell{background:var(--delta-down)} </style>
 </head>
 <body>
 
@@ -312,9 +312,21 @@ body { padding: clamp(9px,1.5vw,24px); }
   <div id="flow-status" class="flow-status"></div>
   <div id="flow-metrics" class="flow-grid"></div>
   <div id="flow-depth" class="depth-grid"></div>
+  <div id="flow-visuals"></div>
   <p class="hint">Only observed data is displayed. Tick activity is not exchange-traded volume. No data or queued does not mean a provider has no such feed.</p>
 </section>
 
+<section class="card hidden" id="research-card">
+<h2>Feed health &amp; research relationships</h2><p class="sub">Aligned completed returns, not trading signals. Positive lead lag means the input precedes the selected reference in historical data.</p>
+<div id="basis-view" class="flow-grid"></div><div class="scroll"><table id="lag-view"></table></div>
+<details><summary>Per-stream diagnostics</summary><div class="scroll"><table id="diag-view"></table></div></details>
+</section>
+<section class="card" id="catalog-card">
+<h2>Instrument directory</h2><p class="sub">Search the captured catalog. Select exact provider/ticker pairs to generate a launch command. Changes apply on the next launch.</p>
+<div class="filters"><input id="catalog-query" placeholder="BTC, gold, provider..." aria-label="Search instruments"><button id="catalog-search">Search</button><input id="manual-pair" placeholder="PROVIDER:TICKER" aria-label="Exact ticker"><button id="catalog-add">Add exact pair</button></div>
+<div class="scroll"><table id="catalog-results"></table></div>
+<div id="saved-pairs" class="flow-status"></div><textarea id="launch-command" readonly rows="3" style="width:100%" aria-label="PowerShell launch command"></textarea><button id="copy-command">Copy launch command</button>
+</section>
 <section class="card hidden" id="table-card">
   <h2>Table view</h2>
   <p class="sub">Every plotted value as text &mdash; the accessible twin of the charts above.</p>
@@ -1199,6 +1211,9 @@ function renderFlow() {
   const add=(name,value,detail="")=>{if(value!=null)items.push([name,value,detail]);};
   if(inst.live_price_usable)add("Timestamped live price",fmt(inst.live_price,d),inst.live_price_source+" · "+fmt(inst.live_price_age_s,2)+"s old");
   if(f.latest_trade?.fresh)add("Event arrival lag",fmt(f.latest_trade.arrival_lag_s*1000,0)+" ms","Requires synchronized clocks");
+  if(f.latency?.count){add("Median arrival lag",fmt(f.latency.median_ms,0)+" ms");add("P95 arrival lag",fmt(f.latency.p95_ms,0)+" ms");}
+  if(f.latest_trade?.fresh && f.open_interest!=null)add("Open interest",compact(f.open_interest));
+  if(f.latest_trade?.fresh && f.large_trade_threshold!=null)add("Large events",fmt(f.large_trade_count,0),"60s sample; ≥ P95 size");
   if(inst.volume!=null)add("Session volume",compact(inst.volume),"Provider units");
   if(inst.turnover!=null)add("Session turnover",compact(inst.turnover),"Provider units");
   const b=f.book||{};
@@ -1206,6 +1221,7 @@ function renderFlow() {
     add("Best bid",fmt(b.bid,d)); add("Best ask",fmt(b.ask,d));
     add("Spread",fmt(b.spread,d)); add("Midpoint",fmt(b.mid,d));
     add("Depth levels",fmt(b.bid_levels+b.ask_levels,0),"Synchronized book");
+    for(const [k,v] of Object.entries(b.depth_changes_15s||{}))add("15s "+k.replaceAll("_"," "),compact(v),"Gross depth change, not executions");
     for(const [bps,row] of Object.entries(b.imbalance||{})){
       if(row.imbalance!=null)add(bps+" bps imbalance",signed(row.imbalance*100,1)+"%","Positive = bid-heavy");
     }
@@ -1258,9 +1274,86 @@ function renderAll() {
   renderIndexed();
   renderCorrelation();
   renderDetail();
+  renderResearch();
   if (SHOW_TABLE) renderTables();
 }
 
+
+function renderResearch(){
+  const card=document.getElementById("research-card");
+  card.classList.toggle("hidden",!FULL?.lead_lag);
+  if(!FULL?.lead_lag)return;
+  const names=Object.fromEntries(FULL.instruments.map(i=>[i.key,i.name]));
+  const b=Object.entries(LIVE?.basis||{}).filter(([k,v])=>v);
+  document.getElementById("basis-view").innerHTML=b.map(([k,v])=>'<div class="flow-metric"><small>'+escapeHtml(names[k]||k)+' perpetual − spot</small><strong>'+signed(v.basis_bps,2)+' bps</strong><small>Time skew '+fmt(v.timestamp_skew_s,2)+'s · USDT/USD differences may contribute</small></div>').join("");
+  document.getElementById("lag-view").innerHTML='<thead><tr><th>Input → '+escapeHtml(names[FULL.lead_lag.target]||FULL.lead_lag.target)+'</th>'+Array.from({length:11},(_,i)=>'<th>'+(i-5)+'m</th>').join("")+'</tr></thead><tbody>'+Object.entries(FULL.lead_lag.rows).map(([k,rows])=>'<tr><td>'+escapeHtml(names[k]||k)+'</td>'+rows.map(r=>'<td title="'+r.samples+' paired returns" style="background:'+(r.correlation==null?'transparent':divergingColor(r.correlation))+';color:'+(Math.abs(r.correlation||0)>.55?'white':'inherit')+'">'+fmt(r.correlation,2)+'</td>').join("")+'</tr>').join("")+'</tbody>';
+  document.getElementById("diag-view").innerHTML='<thead><tr><th>Stream</th><th>Attempts</th><th>Messages</th><th>Retries</th><th>Errors</th><th>Last event</th></tr></thead><tbody>'+Object.entries(FULL.diagnostics||{}).map(([k,v])=>'<tr><td>'+escapeHtml(k)+'</td><td>'+v.attempts+'</td><td>'+v.messages+'</td><td>'+v.retries+'</td><td>'+v.errors+'</td><td>'+escapeHtml(v.last_event||"")+'</td></tr>').join("")+'</tbody>';
+}
+let detailBusy=false;
+async function loadFlowVisuals(){
+  const host=document.getElementById("flow-visuals");
+  const key=SELECTED,inst=LIVE?.instruments.find(i=>i.key===key);
+  if(detailBusy)return;
+  if(!inst?.flow){host.innerHTML="";return;}
+  detailBusy=true;
+  try{
+    const response=await fetch("/api/orderflow?key="+encodeURIComponent(key),{cache:"no-store",signal:AbortSignal.timeout(4000)});
+    if(!response.ok)throw Error("Unavailable");
+    const f=(await response.json()).orderflow[key];
+    if(!f||SELECTED!==key)return;
+    const d=inst.decimals;
+    const out=[];
+    const table=(title,heads,rows)=>'<div class="flow-viz"><h2>'+title+'</h2><div class="scroll"><table><thead><tr>'+heads.map(x=>'<th>'+escapeHtml(x)+'</th>').join("")+'</tr></thead><tbody>'+rows.map(row=>'<tr>'+row.map(v=>'<td>'+escapeHtml(v)+'</td>').join("")+'</tr>').join("")+'</tbody></table></div></div>';
+    const w=f.trade_windows?.["15"];
+    if(w?.fresh && w.buy_volume+w.sell_volume>0){
+      const b=w.buy_volume/(w.buy_volume+w.sell_volume)*100;
+      out.push('<div class="flow-viz"><h2>15-second classified activity</h2><div class="pressure-track"><div class="pressure-buy" style="width:'+b+'%"></div><div class="pressure-sell" style="width:'+(100-b)+'%"></div></div><span class="up">Buy '+fmt(b,1)+'%</span> · <span class="down">Sell '+fmt(100-b,1)+'%</span></div>');
+    }
+    if(f.latest_trade?.fresh && f.recent_trades?.length)out.push(table("Recent trade events",["Time","Side","Price","Quantity"],f.recent_trades.slice(-20).reverse().map(t=>[new Date(t.time*1000).toLocaleTimeString()," "+t.side,fmt(t.price,d),compact(t.quantity)])));
+    const profiles=f.footprint?.profiles||[];
+    const fp=profiles[profiles.length-1];
+    if(f.footprint?.fresh && fp?.levels?.length)out.push(table("Current volume footprint",["Price","Buy","Sell","Delta"],[...fp.levels].sort((a,b)=>b.price-a.price).slice(0,80).map(r=>[fmt(r.price,d),compact(r.buy_volume),compact(r.sell_volume),r.buy_volume==null||r.sell_volume==null?"—":signed(r.buy_volume-r.sell_volume,3)])));
+    const closed=profiles.filter(p=>p.end<=Date.now()/1000&&p.delta!=null);
+    if(closed.length>=2){
+      let total=0;const vals=closed.map(p=>total+=p.delta),lo=Math.min(0,...vals),hi=Math.max(0,...vals),span=hi-lo||1;
+      const points=vals.map((v,i)=>((i/(vals.length-1))*560+20)+","+(110-(v-lo)/span*90)).join(" ");
+      out.push('<div class="flow-viz"><h2>Observed closed-profile CVD</h2><svg viewBox="0 0 600 130" role="img" aria-label="Cumulative observed footprint delta"><polyline points="'+points+'" fill="none" stroke="'+css("--series-3")+'" stroke-width="2"/><text x="20" y="12" fill="'+css("--text-muted")+'" font-size="10">'+fmt(hi,2)+'</text><text x="20" y="126" fill="'+css("--text-muted")+'" font-size="10">'+fmt(lo,2)+'</text></svg><p class="hint">Last '+closed.length+' received closed profiles; not session-wide CVD.</p></div>');
+    }
+    const heat=f.heatmap?.profiles||[];
+    const cells=heat.flatMap((p,x)=>[...(p.bid_levels||[]).map(l=>({...l,x,side:"bid"})),...(p.ask_levels||[]).map(l=>({...l,x,side:"ask"}))]).filter(l=>Number.isFinite(l.price)&&Number.isFinite(l.size)&&l.size>0);
+    if(cells.length && f.streams?.heatmap?.status==="live"){
+      const prices=[...new Set(cells.map(c=>c.price))].sort((a,b)=>b-a),max=Math.max(...cells.map(c=>c.size)),rank=new Map(prices.map((p,i)=>[p,i])),cw=560/heat.length,ch=Math.max(2,180/prices.length);
+      out.push('<div class="flow-viz"><h2>Received liquidity buckets</h2><svg viewBox="0 0 600 '+(prices.length*ch+25)+'" role="img" aria-label="Liquidity heatmap">'+cells.map(c=>'<rect x="'+(20+c.x*cw)+'" y="'+(10+rank.get(c.price)*ch)+'" width="'+cw+'" height="'+ch+'" fill="'+css(c.side==="bid"?"--series-3":"--series-8")+'" opacity="'+Math.max(.12,Math.sqrt(c.size/max))+'"><title>'+fmt(c.price,d)+' · '+c.side+' '+compact(c.size)+'</title></rect>').join("")+'</svg><p class="hint">Green bids / red asks; bucket size normalized to the displayed sample, not guaranteed resting liquidity.</p></div>');
+    }
+    if(f.streams?.tpo?.status==="live" && f.tpo?.levels?.length)out.push(table("TPO price profile",["Price","Blocks visited"],[...f.tpo.levels].sort((a,b)=>b.price-a.price).slice(0,80).map(r=>[fmt(r.price,d),fmt(r.block_indexes.length,0)])));
+    host.innerHTML=out.join("");
+  }catch{if(SELECTED===key)host.textContent="Detailed flow unavailable; see stream status.";}
+  finally{detailBusy=false;}
+}
+let savedPairs=[];
+try{const stored=JSON.parse(localStorage.getItem("tp-watchlist")||"[]");if(Array.isArray(stored))savedPairs=stored.filter(x=>typeof x==="string").slice(0,12);}catch{}
+const validPair=p=>/^[A-Za-z0-9_]+:[A-Za-z0-9_./!+\-]+$/.test(p)&&p.length<=120;
+function showSavedPairs(){
+  const host=document.getElementById("saved-pairs");host.replaceChildren();
+  for(const pair of savedPairs){
+    const b=document.createElement("button");b.textContent=pair+" ×";b.onclick=()=>{savedPairs=savedPairs.filter(x=>x!==pair);showSavedPairs();};host.append(b);
+  }
+  try{localStorage.setItem("tp-watchlist",JSON.stringify(savedPairs));}catch{}
+  document.getElementById("launch-command").value=savedPairs.length?"py -m tpscraper dashboard --remember --orderflow --authorized --auto-renew "+savedPairs.map(p=>'--ticker "'+p+'"').join(" "):"";
+}
+function addPair(p){if(validPair(p)&&!savedPairs.includes(p)&&savedPairs.length<12){savedPairs.push(p);showSavedPairs();}}
+document.getElementById("catalog-add").onclick=()=>addPair(document.getElementById("manual-pair").value.trim());
+document.getElementById("catalog-search").onclick=async()=>{
+  const table=document.getElementById("catalog-results");
+  try{
+    const data=await fetch("/api/catalog?limit=80&q="+encodeURIComponent(document.getElementById("catalog-query").value),{cache:"no-store"}).then(r=>r.json());
+    table.innerHTML='<thead><tr><th>Pair ('+data.matched+' matches)</th><th>Provider</th><th>Listed depth</th><th>Add</th></tr></thead><tbody>'+data.instruments.map((r,i)=>'<tr><td>'+escapeHtml(r.input)+'</td><td>'+escapeHtml(r.provider)+'</td><td>'+(r.orderbook_listed?"Listed":"Unknown")+'</td><td><button data-add-index="'+i+'">Add</button></td></tr>').join("")+'</tbody>';
+    table.querySelectorAll("[data-add-index]").forEach(b=>b.onclick=()=>addPair(data.instruments[+b.dataset.addIndex].input));
+  }catch{table.textContent="Catalog unavailable";}
+};
+document.getElementById("copy-command").onclick=async()=>{const el=document.getElementById("launch-command");el.select();try{await navigator.clipboard.writeText(el.value);}catch{document.execCommand("copy");}};
+showSavedPairs();
+setInterval(loadFlowVisuals,1000);
 function connect() {
   const source = new EventSource("/api/stream");
   const dot = document.getElementById("conn-dot");
