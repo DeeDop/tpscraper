@@ -168,6 +168,13 @@ class NativeDashboardState:
                     volume=d.get("volume"),candidate_volume=None,turnover=d.get("value"),
                     range_position=(last-low)/(high-low) if has_range and high>low else None,
                     realized_vol_pct=vol,bar_count=len(bars),bar_updates=r["bar_updates"],history_ready=60 in r["ready"])
+                # Provider-weighted price over retained completed bars only.
+                # No fallback for missing turnover or incomplete volume fields.
+                weighted=[b for b in bars.values() if b["t"]+60<=now]
+                volume_complete=bool(weighted) and all(b.get("v") is not None and b.get("value") is not None for b in weighted)
+                total_volume=sum(b["v"] for b in weighted) if volume_complete else 0
+                item["history_vwap"]=sum(b["value"] for b in weighted)/total_volume if total_volume>0 else None
+                item["history_vwap_bars"]=len(weighted) if total_volume>0 else 0
                 if with_series:
                     item.update(bars=self.series(bars,60,now),micro_bars=self.series(r["micro_bars"],30,now))
                 if i.key in flow:
@@ -183,7 +190,10 @@ class NativeDashboardState:
                     receipt_age_s=age,update_mode="native_push",status=state,usable_short_term=eligible,
                     outcome=r["quote_state"],samples=r["ticks"],price_changes=r["changes"],
                     main_session=dict(r["sessions"].get("main_session",{})),
-                    daily_session=dict(r["sessions"].get("daily_session",{})))
+                    daily_session=dict(r["sessions"].get("daily_session",{})),
+                    bid=item['bid'],ask=item['ask'],spread=(item['ask']-item['bid']) if item['ask'] is not None and item['bid'] is not None else None,
+                    volume=item['volume'],turnover=item['turnover'],history_vwap=item['history_vwap'],history_vwap_bars=item['history_vwap_bars'],
+                    volume_semantics='tick_activity' if i.symbol.startswith(('FXPPST:','FXEXTS:')) else 'provider_reported')
             for k,f in flow.items():
                 quotes[k]['orderflow']=f
                 if f['book']['fresh']:
