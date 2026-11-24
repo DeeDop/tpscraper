@@ -72,7 +72,11 @@ def main():
     mode.add_argument("--session", action="store_true", help="Use existing experimental session renewal, if permitted")
     mode.add_argument("--browser", action="store_true", help="Opt-in isolated Chrome authorization, if permitted")
     mode.add_argument("--local-chrome", action="store_true", help="Use regular installed Chrome with explicit local authorization handoff")
+    parser.add_argument("--remember", action="store_true", help="Save access token using Windows DPAPI (local Chrome mode)")
+    parser.add_argument("--chrome-profile", help="Existing Chrome profile directory: Default or Profile N")
     args = parser.parse_args()
+    if (args.remember or args.chrome_profile) and not args.local_chrome:
+        parser.error("--remember and --chrome-profile require --local-chrome")
     if not 15 <= args.interval <= 3600 or not 0 <= args.count <= 100000:
         parser.error("interval must be 15–3600 seconds and count must be nonnegative")
     auth = None
@@ -80,8 +84,15 @@ def main():
         print("TPSCRAPER | QUOTE MONITOR", flush=True)
         print("Snapshot polling; not push streaming. Prices are unverified.", flush=True)
         if args.local_chrome:
-            from .local_chrome import LocalChromeAuth
-            auth = LocalChromeAuth()
+            from .local_chrome import LocalChromeAuth, open_chrome
+            from .credential_store import CredentialStore, StoreError
+            store = None
+            if args.remember:
+                try:
+                    store = CredentialStore()
+                except StoreError as exc:
+                    print(str(exc) + " Continuing in memory only.")
+            auth = LocalChromeAuth(store=store, opener=lambda: open_chrome(args.chrome_profile))
         elif args.browser:
             from .browser_auth import BrowserAuth
             auth = BrowserAuth()
