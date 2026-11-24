@@ -25,6 +25,7 @@ def collect_native(state,auth,stop):
             pairs.append(pair)
             by_pair[pair]=[]
         by_pair[pair].append(inst.key)
+    retired=set()  # terminal feature failures persist across token rotations
     while not stop.is_set():
         try:
             headers=auth.headers()   # User-authorized renewal happens on main thread only.
@@ -38,7 +39,6 @@ def collect_native(state,auth,stop):
         halt_lock=threading.Lock()
         workers=[]
         retry_jobs={}
-        retired=set()
 
         def deny(reason):
             with halt_lock:
@@ -181,7 +181,13 @@ def collect_native(state,auth,stop):
                 # Queue every entered ticker. Catalog information only prioritizes;
                 # a missing record never prevents discovery.
                 pending=state.capabilities.queue(state.flows,state.refresh_capabilities) if state.flows else []
-                retry_jobs={(key,kind):time.monotonic()+60 for key,flow in state.flows.items() for kind in flow.states if (key,kind) not in pending}
+                pending=[(k,kind) for k,kind in pending if (state.flows[k].symbol,kind) not in retired]
+                for key,flow in state.flows.items():
+                    for symbol,kind in tuple(retired):
+                        if symbol==flow.symbol:
+                            flow.status(kind,"disabled_until_restart")
+                retry_jobs={(key,kind):time.monotonic()+60 for key,flow in state.flows.items() for kind in flow.states
+                            if (key,kind) not in pending and (flow.symbol,kind) not in retired}
                 active={}
                 decoders={"trades":trade_rows,"footprint":lambda raw:footprint_rows(raw,full=True),
                           "orderbook":lambda raw:book_summary(raw,full=True),
@@ -251,7 +257,7 @@ def collect_native(state,auth,stop):
                 state.all_quotes("native streams paused")
                 for flow in state.flows.values():
                     for kind in list(flow.states):
-                        if "restriction" not in flow.states[kind] and flow.states[kind] not in ("restricted","no_data","unsupported","unavailable","cached_no_data","cached_unsupported","cached_unavailable"):
+                        if "restriction" not in flow.states[kind] and flow.states[kind] not in ("disabled_until_restart","restricted","no_data","unsupported","unavailable","cached_no_data","cached_unsupported","cached_unavailable"):
                             flow.status(kind,"paused")
         if halt:
             state.stop(halt[0])
