@@ -74,7 +74,7 @@ def main():
     parser = argparse.ArgumentParser(description="Experimental TakeProfit quote console")
     parser.add_argument("--symbol", default="XAU/USD")
     parser.add_argument("--provider", default="FXPPST")
-    parser.add_argument("--interval", type=float, default=15, help="Seconds between requests (minimum 15)")
+    parser.add_argument("--interval", type=float, default=15, help="Seconds between requests (minimum 1; use faster polling only if permitted)")
     parser.add_argument("--count", type=int, default=0, help="Number of observations; zero runs until stopped")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--session", action="store_true", help="Use existing experimental session renewal, if permitted")
@@ -86,8 +86,8 @@ def main():
     args = parser.parse_args()
     if (args.remember or args.chrome_profile) and not args.local_chrome:
         parser.error("--remember and --chrome-profile require --local-chrome")
-    if not 15 <= args.interval <= 3600 or not 0 <= args.count <= 100000:
-        parser.error("interval must be 15–3600 seconds and count must be nonnegative")
+    if not 1 <= args.interval <= 3600 or not 0 <= args.count <= 100000:
+        parser.error("interval must be 1–3600 seconds and count must be nonnegative")
     auth = None
     row = TerminalRow()
     if args.history:
