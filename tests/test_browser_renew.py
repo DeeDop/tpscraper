@@ -41,7 +41,8 @@ class BridgeTests(unittest.TestCase):
     def test_unauthorized(self):
         with self.assertRaises(HTTPError) as cm:
             self.req("/status",paired=False)
-        self.assertEqual(cm.exception.code,403)
+        with cm.exception as response:
+            self.assertEqual(response.code,403)
 
     def test_success_once(self):
         t=self.start()
@@ -53,7 +54,8 @@ class BridgeTests(unittest.TestCase):
         self.assertFalse(self.req("/status")["renew"])
         with self.assertRaises(HTTPError) as cm:
             self.req("/token",{"accessToken":token})
-        self.assertEqual(cm.exception.code,409)
+        with cm.exception as response:
+            self.assertEqual(response.code,409)
 
     def test_denied(self):
         t=self.start()
