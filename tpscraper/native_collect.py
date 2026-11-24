@@ -7,7 +7,7 @@ no access-denial retries, no automatic fallback to other data providers.
 import threading
 import time
 import httpx
-from .auth import expires_at
+from .auth import expires_at, AuthError
 from .native_schema import CANDLE_STREAM, QUOTE_STREAM, candle_request, candle_item, quote_stream_request, quote_item
 from .native_probe import messages
 from .extended_schema import plans, trade_rows, book_summary, footprint_rows, tpo_rows
@@ -25,7 +25,12 @@ def collect_native(state,auth,stop):
             by_pair[pair]=[]
         by_pair[pair].append(inst.key)
     while not stop.is_set():
-        headers=auth.headers()   # User-authorized renewal happens on main thread only.
+        try:
+            headers=auth.headers()   # User-authorized renewal happens on main thread only.
+        except AuthError as exc:
+            state.stop('authorization unavailable')
+            print(str(exc),flush=True)
+            return
         expiry=expires_at(headers.get("accesstoken",""))
         cycle=threading.Event()
         halt=[]
@@ -47,11 +52,14 @@ def collect_native(state,auth,stop):
                     if capability is not None:
                         symbol,kind=capability
                         state.capabilities.remember(symbol,kind,status)
-                for attempt in range(3):
+                attempt=0
+                while not cycle.is_set() and not stop.is_set():
                     observed_this_attempt=False
+                    attempt+=1
                     if cycle.is_set() or stop.is_set():
                         return
-                    report("connecting" if attempt==0 else "reconnecting")
+                    report("connecting" if attempt==1 else "reconnecting")
+                    state.stream_event(label,"attempt")
                     try:
                         stream=messages(client,service,payload,headers)
                         try:
@@ -71,11 +79,15 @@ def collect_native(state,auth,stop):
                                         remember(result)
                                         report(result)
                                         return
+                                    if http in (500,502,503,504) or grpc in (4,13,14):
+                                        raise RuntimeError('transient upstream error')
                                     if http or grpc not in (0,None) or raw.get("error"):
                                         report(f"service unavailable ({http or grpc or raw.get('error')})")
                                         return
                                     break
                                 item=decode(raw)
+                                if item:
+                                    state.stream_event(label,"message")
                                 if item is not None and apply(item) is False:
                                     return
                                 if capability is not None and item:
@@ -97,12 +109,16 @@ def collect_native(state,auth,stop):
                             remember("no_data")
                             report("no_data")
                             return
+                        state.stream_event(label,"error",type(exc).__name__)
                         report(type(exc).__name__)
                         if isinstance(exc,ValueError):
                             return  # Never retry an unknown schema in a loop.
-                    if attempt<2 and cycle.wait(2**(attempt+1)):
+                    # Slow recovery after repeated transport failures. No access-denial
+                    # retries or schema guessing. Keep healthy streams running.
+                    delay=min(120,2**min(attempt,7))
+                    state.stream_event(label,"retry",str(delay))
+                    if cycle.wait(delay):
                         return
-                report("stream stopped; retry limit reached")
 
             def launch(*args):
                 t=threading.Thread(target=run,args=args,daemon=True)
@@ -115,8 +131,8 @@ def collect_native(state,auth,stop):
                 keys=by_pair[(item["symbol"],item["provider"])]
                 for key in keys:
                     state.ingest_quote(key,item)
-                if code==8:
-                    deny("quote stream rate restriction")
+                if code in (7,8):
+                    deny("quote stream access or rate restriction")
                     return False
                 if code==16:
                     deny("quote stream authorization required")
@@ -136,7 +152,7 @@ def collect_native(state,auth,stop):
                         def on_bar(item,key=inst.key,p=period):
                             state.ingest_bar(key,p,item)
                             code=item.get("status",0)
-                            if code in (8,16):
+                            if code in (7,8,16):
                                 deny("candle rate restriction or authorization required")
                             return not bool(code)
                         def report(reason,key=inst.key,p=period):
@@ -190,9 +206,13 @@ def collect_native(state,auth,stop):
             finally:
                 cycle.set()
                 # Close sockets to wake blocked readers before joining threads.
+                # Bound total shutdown time rather than waiting once per socket.
                 client.close()
+                deadline=time.monotonic()+5
                 for t in workers:
-                    t.join(timeout=1)
+                    t.join(timeout=max(0,deadline-time.monotonic()))
+                if any(t.is_alive() for t in workers):
+                    halt.append("stream shutdown incomplete; restart required")
                 state.all_quotes("native streams paused")
                 for flow in state.flows.values():
                     for kind in list(flow.states):
@@ -207,4 +227,5 @@ def collect_native(state,auth,stop):
         if not renew:
             state.stop("native streams stopped")
             return
-        print("Access token nearing expiry; fresh local authorization required.",flush=True)
+        state.stream_event("authorization","renewal")
+        print("Access token nearing expiry; renewing local authorization.",flush=True)
