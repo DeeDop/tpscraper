@@ -12,6 +12,7 @@ from .native_schema import CANDLE_STREAM, QUOTE_STREAM, candle_request, candle_i
 from .native_probe import messages
 from .extended_schema import plans, trade_rows, book_summary, footprint_rows, tpo_rows
 from .flow_state import BookGap
+import random
 
 
 def collect_native(state,auth,stop):
@@ -36,6 +37,8 @@ def collect_native(state,auth,stop):
         halt=[]
         halt_lock=threading.Lock()
         workers=[]
+        retry_jobs={}
+        retired=set()
 
         def deny(reason):
             with halt_lock:
@@ -53,8 +56,10 @@ def collect_native(state,auth,stop):
                         symbol,kind=capability
                         state.capabilities.remember(symbol,kind,status)
                 attempt=0
+                failures=0
                 while not cycle.is_set() and not stop.is_set():
                     observed_this_attempt=False
+                    attempt_started=time.monotonic()
                     attempt+=1
                     if cycle.is_set() or stop.is_set():
                         return
@@ -70,6 +75,11 @@ def collect_native(state,auth,stop):
                                 if isinstance(raw,dict):
                                     http=raw.get("http_status")
                                     grpc=raw.get("grpc_status")
+                                    if capability is not None and (http==403 or grpc==7):
+                                        report("restricted")
+                                        state.stream_event(label,"error","feature restricted")
+                                        retired.add(capability)
+                                        return
                                     if http in (401,403,429) or grpc in (7,8,16):
                                         reason=f"{label}: access or rate restriction ({http or grpc})"
                                         report(reason)
@@ -84,6 +94,8 @@ def collect_native(state,auth,stop):
                                         raise RuntimeError('transient upstream error')
                                     if http or grpc not in (0,None) or raw.get("error"):
                                         report(f"service unavailable ({http or grpc or raw.get('error')})")
+                                        if capability is not None:
+                                            retired.add(capability)
                                         return
                                     break
                                 item=decode(raw)
@@ -103,7 +115,7 @@ def collect_native(state,auth,stop):
                             report("no_data")
                             return
                         report("stream ended")
-                    except (httpx.HTTPError,ValueError,RuntimeError) as exc:
+                    except (httpx.HTTPError,ValueError,RuntimeError,KeyError,TypeError,OverflowError) as exc:
                         if cycle.is_set() or stop.is_set():
                             return
                         if capability is not None and not observed_this_attempt and isinstance(exc,httpx.ReadTimeout):
@@ -112,11 +124,14 @@ def collect_native(state,auth,stop):
                             return
                         state.stream_event(label,"error",type(exc).__name__)
                         report(type(exc).__name__)
-                        if isinstance(exc,ValueError):
+                        if isinstance(exc,(ValueError,KeyError,TypeError,OverflowError)):
+                            if capability is not None:
+                                retired.add(capability)
                             return  # Never retry an unknown schema in a loop.
                     # Slow recovery after repeated transport failures. No access-denial
                     # retries or schema guessing. Keep healthy streams running.
-                    delay=min(120,2**min(attempt,7))
+                    failures=1 if time.monotonic()-attempt_started>=60 else failures+1
+                    delay=min(120,2**min(failures,7)+random.uniform(0,1))
                     state.stream_event(label,"retry",str(delay))
                     if cycle.wait(delay):
                         return
@@ -166,6 +181,7 @@ def collect_native(state,auth,stop):
                 # Queue every entered ticker. Catalog information only prioritizes;
                 # a missing record never prevents discovery.
                 pending=state.capabilities.queue(state.flows,state.refresh_capabilities) if state.flows else []
+                retry_jobs={(key,kind):time.monotonic()+60 for key,flow in state.flows.items() for kind in flow.states if (key,kind) not in pending}
                 active={}
                 decoders={"trades":trade_rows,"footprint":lambda raw:footprint_rows(raw,full=True),
                           "orderbook":lambda raw:book_summary(raw,full=True),
@@ -194,6 +210,21 @@ def collect_native(state,auth,stop):
                     for job,thread in list(active.items()):
                         if not thread.is_alive():
                             del active[job]
+                            retry_jobs[job]=time.monotonic()+60
+                    for job,due in list(retry_jobs.items()):
+                        if time.monotonic()<due:
+                            continue
+                        key,kind=job
+                        flow=state.flows[key]
+                        if (flow.symbol,kind) in retired:
+                            del retry_jobs[job]
+                            continue
+                        if state.capabilities.lookup(flow.symbol,kind) in ("no_data","unavailable","unsupported"):
+                            retry_jobs[job]=time.monotonic()+60
+                            continue
+                        flow.status(kind,"queued")
+                        pending.append(job)
+                        del retry_jobs[job]
                     if pending and len(active)<state.flow_budget and time.monotonic()>=next_launch:
                         launch_next()
                         next_launch=time.monotonic()+0.5
@@ -203,8 +234,9 @@ def collect_native(state,auth,stop):
                     if expiry is not None and time.time()>=expiry-45:
                         renew=True
                         break
-                    if not pending and not any(t.is_alive() for t in workers):
+                    if not pending and not retry_jobs and not any(t.is_alive() for t in workers):
                         break
+                    workers[:]=[t for t in workers if t.is_alive()]
                     stop.wait(0.25)
             finally:
                 cycle.set()
@@ -219,7 +251,7 @@ def collect_native(state,auth,stop):
                 state.all_quotes("native streams paused")
                 for flow in state.flows.values():
                     for kind in list(flow.states):
-                        if "restriction" not in flow.states[kind] and flow.states[kind] not in ("no_data","unsupported","unavailable","cached_no_data","cached_unsupported","cached_unavailable"):
+                        if "restriction" not in flow.states[kind] and flow.states[kind] not in ("restricted","no_data","unsupported","unavailable","cached_no_data","cached_unsupported","cached_unavailable"):
                             flow.status(kind,"paused")
         if halt:
             state.stop(halt[0])
