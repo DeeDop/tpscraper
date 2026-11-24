@@ -70,10 +70,10 @@ def extract_har(har):
             continue
         try:
             decoder=Decoder()
-            frames=decoder.feed(base64.b64decode(content["text"],validate=True))
+            frames=list(decoder.feed(base64.b64decode(content["text"],validate=True)))
             decoder.finish()
             trailers=[v for flag,v in frames if flag==128]
-            if not any(any(line.strip().lower()==b"grpc-status: 0" for line in t.splitlines()) for t in trailers):
+            if not any(any(line.partition(b":")[0].strip().lower()==b"grpc-status" and line.partition(b":")[2].strip()==b"0" for line in t.splitlines()) for t in trailers):
                 continue
             batch=[]
             for flag,body in frames:
