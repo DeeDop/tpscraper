@@ -103,4 +103,18 @@ py -m tpscraper.native_probe candles --remember --count 360 --seconds 15
 py -m tpscraper.native_probe quotes --remember --seconds 15
 ````
 
-Each command reports decoded counts, timestamps and market data only. No auth headers or credentials are printed. History is requested as ordinary uncompressed messages; compressed response data is rejected until supported. The quote test requests two tagged instruments in one stream and merges sparse fields. The dashboard continues to use its existing snapshot collector until native endpoint authorization and live message decoding are confirmed. Do not treat any of these independent prices as Kalshi settlement values.
+Each command reports decoded counts, timestamps and market data only. No auth headers or credentials are printed. History is requested as ordinary uncompressed messages; compressed response data is rejected until supported. The quote test requests two tagged instruments in one stream and merges sparse fields. The native endpoint authorization and Gold/BTC live decoding were confirmed by the November 24 user tests. The dashboard now defaults to native streams; use --snapshot to explicitly choose the older collector. Do not treat any of these independent prices as Kalshi settlement values.
+
+## Native dashboard — current default
+
+Successful November 24 live tests: Gold history returned 360 one-minute bars, all with provider volume; the Gold candle stream delivered 360 distinct bars plus 53 repeated-bar updates in a 15-second observation; one tagged quote stream delivered 77 messages over a 15-second observation and decoded both Gold and BTC. Those probes did not supply quote exchange timestamps or buying/selling volume for Gold.
+
+```powershell
+py -m tpscraper dashboard --remember
+py -m tpscraper dashboard --watchlist gold --remember
+py -m tpscraper serve --watchlist markets15 --remember
+```
+
+Native mode requests one tagged quote stream and one one-minute candle stream per selected instrument. Each candle stream backfills 360 bars by default, then replaces the evolving candle using the provider's complete OHLCV values. The existing dashboard displays the initial history as soon as it arrives, then follows new events. 5m/15m candles are rolled up from 1m data. Optional `--native-30s` requests an additional native stream per instrument (not yet tested live); the 30s control is disabled in native mode without it. The service uses the existing loopback port 8789 and endpoints, with push-mode labels, receipt freshness and separate exchange timestamps if present. Session volume and candle volume are distinct. VWAP in the selected window uses reported turnover when available; volume units are provider-specific. Missing order-book data and buy/sell volume remain missing, not zero or inferred. No quote without an actual fresh exchange timestamp is marked usable_short_term. This is not the Kalshi settlement oracle.
+
+Native mode does not mix local sample history with provider candles, and does not poll ListQuotes. The former local sample cache and polling flags apply only with `--snapshot`. The connector stops on service-wide authorization or rate-limit errors; unsupported individual symbols are reported separately. Token renewal is explicitly approved through the local browser handoff, not automatic cookie extraction. The eight-/nine-/twelve-instrument live configurations still need PC testing; the successful probes used Gold and BTC.
