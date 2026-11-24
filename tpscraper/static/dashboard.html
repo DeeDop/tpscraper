@@ -284,7 +284,7 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
   <div class="scroll" style="margin-top:16px"><table id="corr-table"></table></div>
 </section>
 
-<p class="foot">Times shown in your local timezone. Data via TakeProfit; experimental snapshots, not verified exchange ticks or Kalshi settlement. Changes are since first observation.</p>
+<p class="foot">Times shown in your local timezone. Data via TakeProfit; experimental snapshots, not verified exchange ticks or Kalshi settlement. Changes use candidate session values when available, otherwise since first observation.</p>
 
 <script>
 "use strict";
@@ -485,7 +485,7 @@ function renderTiles(payload) {
       ${spark}
       <div class="tile-foot">
         <span class="s-${inst.status}"><span class="icon">${ICONS[inst.status]}</span></span>
-        <span>${mode}</span>
+        <span>${mode} · ${inst.change_basis === "candidate_session" ? "session?" : "since start"}</span>
         <span style="margin-left:auto">${inst.ticks.toLocaleString()} samples</span>
       </div>
     </article>`;
