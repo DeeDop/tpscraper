@@ -18,6 +18,10 @@ def messages(client,service,payload,headers):
         if res.status_code!=200:
             yield {"http_status":res.status_code}
             return
+        header_status=res.headers.get("grpc-status")
+        if header_status and header_status.isdigit() and int(header_status)!=0:
+            yield {"grpc_status":int(header_status)}
+            return
         if "application/grpc-web" not in res.headers.get("content-type",""):
             yield {"error":"unexpected_content_type"}
             return
