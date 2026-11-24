@@ -14,6 +14,8 @@ from .__main__ import probe
 from .dashboard_state import DashboardState
 from .native_state import NativeDashboardState
 from .native_collect import collect_native
+from .flow_record import FlowRecorder
+from .catalog import catalog_payload
 from .history_cache import HistoryCache
 from .instruments import WATCHLISTS, Instrument
 from .local_chrome import LocalChromeAuth, open_chrome
@@ -72,6 +74,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         if route=="/api/snapshot":
             payload=self.state.snapshot(True)
+        elif route=="/api/orderflow":
+            payload={"orderflow":self.state.flow_snapshot(True)} if hasattr(self.state,"flow_snapshot") else {"orderflow":{}}
+        elif route=="/api/catalog":
+            payload=catalog_payload(self.path)
         elif route=="/api/quotes":
             payload=self.quote_payload(self.state.snapshot(False))
         elif route=="/api/health":
@@ -136,6 +142,9 @@ def main(argv=None):
     p.add_argument("--interval",type=float,default=15,help="Minimum seconds per full watchlist sweep")
     p.add_argument("--requests-per-second",type=float,default=1,help="Global sequential request cap (1–3; increase only if provider permits)")
     p.add_argument("--snapshot",action="store_true",help="Legacy polling mode instead of native streams")
+    p.add_argument("--orderflow",action="store_true",help="Enable additional tested read-only market data subscriptions")
+    p.add_argument("--authorized",action="store_true",help="Confirm account/provider permission for additional programmatic subscriptions")
+    p.add_argument("--record-flow",type=Path,help="Optional local SQLite feature journal")
     p.add_argument("--native-30s",action="store_true",help="Optional extra 30-second candle subscription per instrument")
     p.add_argument("--no-cache",action="store_true",help="Do not persist or restore local sampled bars")
     p.add_argument("--history",type=int,default=360,help="Requested native one-minute history count (default 360); legacy cache retention in minutes")
@@ -148,7 +157,13 @@ def main(argv=None):
     args=p.parse_args(argv)
     if not 1<=args.requests_per_second<=3 or not 1<=args.interval<=3600 or not 1<=args.history<=1440 or not 1024<=args.port<=65535:
         p.error("Invalid interval, port or history")
+    if args.orderflow and (args.snapshot or not args.authorized):
+        p.error("--orderflow requires native mode and --authorized")
+    if args.record_flow and not args.orderflow:
+        p.error("--record-flow requires --orderflow")
     instruments=WATCHLISTS[args.watchlist]
+    if args.orderflow and args.watchlist=="gold" and not args.ticker:
+        instruments=instruments+(Instrument("gold_perp","CXBNF8:XAU/USDT.P","Gold perpetual (Binance)","Gold flow",5,2),)
     if args.ticker:
         if len(args.ticker)>12:
             p.error("Maximum 12 instruments per process")
@@ -170,6 +185,7 @@ def main(argv=None):
             print(str(exc)+" Continuing in memory only.")
     auth=LocalChromeAuth(store=store,opener=lambda:open_chrome(args.chrome_profile))
     cache=None
+    recorder=None
     if args.snapshot and not args.no_cache:
         try:
             cache=HistoryCache()
@@ -191,7 +207,12 @@ def main(argv=None):
     else:
         if args.history>1000 or (args.native_30s and args.history>500):
             p.error("Native history max 1000 minutes, or 500 with 30-second streams")
-        state=NativeDashboardState(instruments,args.history,args.native_30s)
+        if args.record_flow:
+            try:
+                recorder=FlowRecorder(args.record_flow)
+            except (OSError,sqlite3.Error):
+                p.error("Could not open local feature journal")
+        state=NativeDashboardState(instruments,args.history,args.native_30s,args.orderflow,recorder)
     stop=threading.Event()
     server=None
     thread=None
@@ -234,6 +255,8 @@ def main(argv=None):
         auth.close()
         if cache is not None:
             cache.close()
+        if recorder is not None and getattr(state,"recorder",None) is not None:
+            recorder.close()
 
 if __name__=="__main__":
     main()
