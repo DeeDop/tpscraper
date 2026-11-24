@@ -39,7 +39,7 @@ def collect_native(state,auth,stop):
                 cycle.set()
 
         with httpx.Client(http2=True,timeout=httpx.Timeout(20.0,connect=10.0),
-                          limits=httpx.Limits(max_connections=32,max_keepalive_connections=16),
+                          limits=httpx.Limits(max_connections=1+len(state.instruments)*(2 if state.micro else 1)+state.flow_budget,max_keepalive_connections=16),
                           trust_env=False,follow_redirects=False) as client:
             def run(service,payload,decode,apply,report,label,capability=None):
                 observed=False
@@ -48,6 +48,7 @@ def collect_native(state,auth,stop):
                         symbol,kind=capability
                         state.capabilities.remember(symbol,kind,status)
                 for attempt in range(3):
+                    observed_this_attempt=False
                     if cycle.is_set() or stop.is_set():
                         return
                     report("connecting" if attempt==0 else "reconnecting")
@@ -77,12 +78,14 @@ def collect_native(state,auth,stop):
                                 item=decode(raw)
                                 if item is not None and apply(item) is False:
                                     return
-                                if capability is not None and item and not observed:
-                                    observed=True
-                                    remember("observed")
+                                if capability is not None and item:
+                                    observed_this_attempt=True
+                                    if not observed:
+                                        observed=True
+                                        remember("observed")
                         finally:
                             stream.close()
-                        if capability is not None and not observed:
+                        if capability is not None and not observed_this_attempt:
                             remember("no_data")
                             report("no_data")
                             return
@@ -90,7 +93,7 @@ def collect_native(state,auth,stop):
                     except (httpx.HTTPError,ValueError,RuntimeError) as exc:
                         if cycle.is_set() or stop.is_set():
                             return
-                        if capability is not None and not observed and isinstance(exc,httpx.ReadTimeout):
+                        if capability is not None and not observed_this_attempt and isinstance(exc,httpx.ReadTimeout):
                             remember("no_data")
                             report("no_data")
                             return
@@ -193,7 +196,7 @@ def collect_native(state,auth,stop):
                 state.all_quotes("native streams paused")
                 for flow in state.flows.values():
                     for kind in list(flow.states):
-                        if flow.states[kind] not in ("no_data","unsupported","unavailable","cached_no_data","cached_unsupported","cached_unavailable"):
+                        if "restriction" not in flow.states[kind] and flow.states[kind] not in ("no_data","unsupported","unavailable","cached_no_data","cached_unsupported","cached_unavailable"):
                             flow.status(kind,"paused")
         if halt:
             state.stop(halt[0])
