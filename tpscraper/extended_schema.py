@@ -52,8 +52,8 @@ def levels(f,n):
     result=[]
     for level in many(f,n):
         p,q=dec(level,1),dec(level,2)
-        # A zero size may be encoded by omitting the quantity in a book delta.
-        # Keep it unknown here rather than applying an unvalidated deletion.
+        # The state layer interprets omitted size as zero for order-book updates.
+        # Heatmap optional statistics remain nullable.
         if p is None or p<=0 or (q is not None and q<0):
             raise ValueError("Invalid price level")
         result.append(dict(price=p,size=q,max_size=dec(level,3),twa_size=dec(level,4)))
@@ -104,14 +104,42 @@ def footprint_rows(raw,full=False):
                                      sell_trades=get(r,4,0),buy_trades=get(r,5,0))
     return [result] if rows or sell is not None or buy is not None else []
 
-def tpo_rows(raw):
+def uints(f,n):
+    result=[]
+    for wire,value in f.get(n,[]):
+        if wire==0:
+            result.append(value)
+        elif wire==2:
+            acc=shift=0
+            for b in value:
+                acc|=(b&127)<<shift
+                if b<128:
+                    result.append(acc)
+                    acc=shift=0
+                else:
+                    shift+=7
+                    if shift>35:
+                        raise ValueError("Invalid packed uint32")
+            if shift:
+                raise ValueError("Truncated packed uint32")
+        else:
+            raise ValueError("Invalid uint32 field")
+    if any(x>=2**32 for x in result):
+        raise ValueError("Invalid uint32 value")
+    return result
+
+def tpo_rows(raw,full=False):
     f=fields(raw)
     b=get(f,1,2)
     if b is not None:
         p=fields(b)
-        return [dict(kind="profile",start=ts(p,1),end=ts(p,10),price_rows=len(many(p,5)),
+        row=dict(kind="profile",start=ts(p,1),end=ts(p,10),price_rows=len(many(p,5)),
                      blocks=len(many(p,6)),row_size=dec(p,4),poc=dec(p,7),
-                     initial_balance_high=dec(p,8),initial_balance_low=dec(p,9))]
+                     initial_balance_high=dec(p,8),initial_balance_low=dec(p,9))
+        if full:
+            row["levels"]=[dict(price=dec(r,1),block_indexes=uints(r,2),sell_volume=dec(r,5),buy_volume=dec(r,6)) for r in many(p,5)]
+            row["block_infos"]=[get(b,1,0,0) for b in many(p,6)]
+        return [row]
     b=get(f,2,2)
     if b is not None:
         p=fields(b)
@@ -121,6 +149,9 @@ def tpo_rows(raw):
                 row[k]=dec(p,n)
         if get(p,10,2) is not None:
             row["end"]=ts(p,10)
+        if full:
+            row["row_diffs"]=[dict(price=dec(r,1),block_indexes=uints(r,2),sell_volume=dec(r,3),buy_volume=dec(r,4)) for r in many(p,5)]
+            row["block_appends"]=[dict(index=get(a,1,0,0),offsets=[get(b,1,0,0) for b in many(a,2)]) for a in many(p,6)]
         return [row]
     return []
 
