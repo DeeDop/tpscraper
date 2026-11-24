@@ -68,7 +68,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     # Compatible quotes event for headless consumers.
                     self.wfile.write(("event: quotes\ndata: "+json.dumps(self.quote_payload(payload),allow_nan=False)+"\n\n").encode())
                     self.wfile.flush()
-                    self.stop.wait(0.5)
+                    self.stop.wait(0.25)
             except OSError:
                 pass
             return
@@ -85,7 +85,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             payload=dict(connected=data["connected"],mode=data["mode"],reason=data["reason"],
                          instruments=len(data["quotes"]),usable_count=sum(q["usable_short_term"] for q in data["quotes"].values()),
                          receiving=sum(q["status"] in ("LIVE","UNVERIFIED") for q in data["quotes"].values()),
-                         history_ready=data.get("history_ready",0))
+                         history_ready=data.get("history_ready",0),
+                         timestamped_live_count=sum(q.get("live_price_usable",False) for q in data["quotes"].values()))
         else:
             self.send_error(404)
             return
@@ -143,7 +144,7 @@ def main(argv=None):
     p.add_argument("--requests-per-second",type=float,default=1,help="Global sequential request cap (1–3; increase only if provider permits)")
     p.add_argument("--snapshot",action="store_true",help="Legacy polling mode instead of native streams")
     p.add_argument("--orderflow",action="store_true",help="Discover advanced market data for every requested instrument")
-    p.add_argument("--flow-budget",type=int,default=24,help="Maximum concurrent advanced subscriptions; increase only if provider permits (1-60)")
+    p.add_argument("--flow-budget",type=int,default=None,help="Maximum concurrent advanced subscriptions (default all five services per entered ticker; set a lower limit if needed, 1-60)")
     p.add_argument("--refresh-capabilities",action="store_true",help="Retest cached unavailable capabilities once at startup")
     p.add_argument("--authorized",action="store_true",help="Confirm account/provider permission for additional programmatic subscriptions")
     p.add_argument("--record-flow",type=Path,help="Optional local SQLite feature journal")
@@ -160,7 +161,7 @@ def main(argv=None):
     args=p.parse_args(argv)
     if not 1<=args.requests_per_second<=3 or not 1<=args.interval<=3600 or not 1<=args.history<=1440 or not 1024<=args.port<=65535:
         p.error("Invalid interval, port or history")
-    if not 1<=args.flow_budget<=60:
+    if args.flow_budget is not None and not 1<=args.flow_budget<=60:
         p.error("--flow-budget must be 1-60")
     if args.refresh_capabilities and not args.orderflow:
         p.error("--refresh-capabilities requires --orderflow")
@@ -221,7 +222,7 @@ def main(argv=None):
                 recorder=FlowRecorder(args.record_flow)
             except (OSError,sqlite3.Error):
                 p.error("Could not open local feature journal")
-        state=NativeDashboardState(instruments,args.history,args.native_30s,args.orderflow,recorder,args.flow_budget,args.refresh_capabilities)
+        state=NativeDashboardState(instruments,args.history,args.native_30s,args.orderflow,recorder,args.flow_budget or min(60,5*len(instruments)),args.refresh_capabilities)
     stop=threading.Event()
     server=None
     thread=None
