@@ -39,7 +39,11 @@ def trade_rows(raw):
         p,q=dec(t,4),dec(t,5)
         if p is None or q is None or p<=0 or q<0:
             raise ValueError("Invalid trade")
-        rows.append(dict(time=ts(t,3),price=p,quantity=q,
+        ident=get(t,12,2)
+        number=get(t,1,2)
+        trade_id=get(fields(ident),1,2,b"").decode() if ident is not None else None
+        trade_no=get(fields(number),1,0,0) if number is not None else None
+        rows.append(dict(time=ts(t,3),price=p,quantity=q,trade_id=trade_id or (str(trade_no) if trade_no is not None else None),
                          side={1:"buy",2:"sell"}.get(get(t,6,0,0),"unknown"),
                          open_interest=dec(t,8)))
     return rows
@@ -55,7 +59,7 @@ def levels(f,n):
         result.append(dict(price=p,size=q,max_size=dec(level,3),twa_size=dec(level,4)))
     return result
 
-def book_summary(raw,heat=False):
+def book_summary(raw,heat=False,full=False):
     f=fields(raw)
     k=1 if get(f,1,2) is not None else 2 if not heat and get(f,2,2) is not None else None
     if k is None:
@@ -76,9 +80,11 @@ def book_summary(raw,heat=False):
         if ap and bp and min(ap)>=max(bp):
             row["spread"]=min(ap)-max(bp)
     row.update(example_ask=a[0] if a else None,example_bid=d[0] if d else None)
+    if full:
+        row.update(ask_levels=a,bid_levels=d)
     return [row] if a or d else []
 
-def footprint_rows(raw):
+def footprint_rows(raw,full=False):
     f=fields(raw)
     b=get(f,1,2)
     if b is None:
@@ -90,6 +96,8 @@ def footprint_rows(raw):
                 sell_volume=sell,buy_volume=buy,sell_trades=get(p,8,0),buy_trades=get(p,9,0))
     if sell is not None and buy is not None:
         result["delta"]=buy-sell
+    if full:
+        result["levels"]=[dict(price=dec(r,1),sell_volume=dec(r,2),buy_volume=dec(r,3),sell_trades=get(r,4,0,0),buy_trades=get(r,5,0,0)) for r in rows]
     if rows:
         r=rows[0]
         result["example_level"]=dict(price=dec(r,1),sell_volume=dec(r,2),buy_volume=dec(r,3),
@@ -106,7 +114,14 @@ def tpo_rows(raw):
                      initial_balance_high=dec(p,8),initial_balance_low=dec(p,9))]
     b=get(f,2,2)
     if b is not None:
-        return [dict(kind="diff",start=ts(fields(b),1))]
+        p=fields(b)
+        row=dict(kind="diff",start=ts(p,1))
+        for n,k in ((4,"row_size"),(7,"poc"),(8,"initial_balance_high"),(9,"initial_balance_low")):
+            if get(p,n,2) is not None:
+                row[k]=dec(p,n)
+        if get(p,10,2) is not None:
+            row["end"]=ts(p,10)
+        return [row]
     return []
 
 def renko_rows(raw):
