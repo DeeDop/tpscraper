@@ -25,6 +25,8 @@ def collect_native(state,auth,stop):
             by_pair[pair]=[]
         by_pair[pair].append(inst.key)
     retired=set()  # terminal feature failures persist across token rotations
+    previous_expiry=None
+    generation=0
     while not stop.is_set():
         try:
             headers=auth.headers()   # User-authorized renewal happens on main thread only.
@@ -33,6 +35,10 @@ def collect_native(state,auth,stop):
             print(str(exc),flush=True)
             return
         expiry=expires_at(headers.get("accesstoken",""))
+        generation+=1
+        if generation>1 and expiry is not None and (previous_expiry is None or expiry>previous_expiry):
+            state.stream_event("authorization","renewal_success")
+        previous_expiry=expiry
         cycle=threading.Event()
         halt=[]
         halt_lock=threading.Lock()
@@ -236,6 +242,14 @@ def collect_native(state,auth,stop):
                         state.record_flow()
                         next_record=time.monotonic()+1
                     if expiry is not None and time.time()>=expiry-45:
+                        state.stream_event("authorization","renewal")
+                        if hasattr(auth,"prepare_renewal"):
+                            try:
+                                auth.prepare_renewal()
+                            except AuthError as exc:
+                                state.stream_event("authorization","error","renewal failed")
+                                deny(str(exc))
+                                break
                         renew=True
                         break
                     if not pending and not retry_jobs and not any(t.is_alive() for t in workers):
@@ -270,5 +284,4 @@ def collect_native(state,auth,stop):
         if not renew:
             state.stop("native streams stopped")
             return
-        state.stream_event("authorization","renewal")
-        print("Access token nearing expiry; renewing local authorization.",flush=True)
+        print("Access token nearing expiry; rotating local authorization.",flush=True)
