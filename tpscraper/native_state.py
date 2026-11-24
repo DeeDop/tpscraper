@@ -27,7 +27,7 @@ class NativeDashboardState:
         self.reason="connecting native streams"
         self.data={i.key:dict(sessions={},last=None,received=None,exchange=None,
                               ticks=0,changes=0,quote_state="connecting",
-                              bars={},micro_bars={},bar_state={},ready=set(),bar_updates=0)
+                              bars={},micro_bars={},bar_state={},ready=set(),bar_updates=0,bar_received={},bar_revision=0,stats_cache=None)
                    for i in self.instruments}
 
     def stream_event(self,label,event,detail=None):
@@ -58,7 +58,10 @@ class NativeDashboardState:
 
     def bar_state(self,key,period,reason):
         with self.lock:
-            self.data[key]["bar_state"][period]=reason
+            row=self.data[key]
+            row["bar_state"][period]=reason
+            if reason!="receiving":
+                row["ready"].discard(period)
 
     def ingest_quote(self,key,item,now=None):
         now=time.time() if now is None else now
@@ -71,6 +74,10 @@ class NativeDashboardState:
                 if name in item:
                     target=r["sessions"].setdefault(name,{})
                     incoming=item[name]
+                    incoming_time=incoming.get("exchange_timestamp")
+                    previous_time=target.get("exchange_timestamp")
+                    if incoming_time is not None and previous_time is not None and incoming_time<previous_time:
+                        continue
                     if "last" in incoming and "exchange_timestamp" not in incoming:
                         target.pop("exchange_timestamp",None)
                     target.update(incoming)
@@ -80,7 +87,7 @@ class NativeDashboardState:
             if "last" not in update:
                 return
             p=update["last"]
-            if not math.isfinite(p):
+            if not math.isfinite(p) or p<=0:
                 return
             ts=update.get("exchange_timestamp")
             if ts is not None and (not math.isfinite(ts) or ts>now+2):
@@ -106,6 +113,9 @@ class NativeDashboardState:
                     r["bar_updates"]+=1
                 # Stream delivers complete replacement candle, not incremental volume.
                 target[b["t"]]=dict(b)
+                r["bar_received"][period]=time.time()
+                if period==60:
+                    r["bar_revision"]+=1
                 limit=self.history*(2 if period==30 else 1)
                 if len(target)>limit:
                     for t in sorted(target)[:len(target)-limit]:
@@ -118,6 +128,9 @@ class NativeDashboardState:
         with self.lock:
             self.running=False
             self.reason=reason
+        for flow in self.flows.values():
+            for kind in tuple(flow.states):
+                flow.status(kind,"stopped")
 
     @staticmethod
     def series(target,period,now):
@@ -132,7 +145,7 @@ class NativeDashboardState:
             return
         try:
             self.recorder.write_snapshot(self.snapshot(True,with_analysis=False))
-        except (OSError,RuntimeError):
+        except (OSError,RuntimeError,ValueError):
             print('Flow recording disabled after local write error.',flush=True)
             self.recorder.close()
             self.recorder=None
@@ -168,8 +181,23 @@ class NativeDashboardState:
                 low,high=d.get("low"),d.get("high")
                 has_range=last is not None and low is not None and high is not None and low<=last<=high
                 bar_note=r["bar_state"].get(60,"connecting")
-                rr=list(returns(self.series(bars,60,now)).values())
-                vol=stdev(rr)*math.sqrt(365*24*60)*100 if len(rr)>=20 else None
+                # Heavy completed-bar statistics are cached until the next closed
+                # minute, or until historical bars are revised.
+                latest_closed=max((t for t in bars if t+60<=now),default=None)
+                cache_key=(r["bar_revision"],latest_closed)
+                cached=r["stats_cache"]
+                if cached is None or cached[0]!=cache_key:
+                    rr=list(returns(self.series(bars,60,now)).values())
+                    vol=stdev(rr)*math.sqrt(365*24*60)*100 if len(rr)>=20 else None
+                    weighted=[b for b in bars.values() if b["t"]+60<=now]
+                    volume_complete=bool(weighted) and all(b.get("v") is not None and b.get("value") is not None for b in weighted)
+                    total_volume=sum(b["v"] for b in weighted) if volume_complete else 0
+                    vwap=sum(b["value"] for b in weighted)/total_volume if total_volume>0 else None
+                    gaps=sum(max(0,int((b-a)//60)-1) for a,b in zip(sorted(bars),sorted(bars)[1:]))
+                    cached=(cache_key,vol,vwap,len(weighted) if total_volume>0 else 0,gaps)
+                    r["stats_cache"]=cached
+                _,vol,vwap,vwap_count,gaps=cached
+                bar_age=None if 60 not in r["bar_received"] else max(0,now-r["bar_received"][60])
                 checks=[
                     dict(id="feed",status=severity,detail=r["quote_state"]),
                     dict(id="fresh",status="good" if eligible else "warning" if fresh else "unknown",
@@ -189,18 +217,17 @@ class NativeDashboardState:
                     realized_vol_pct=vol,bar_count=len(bars),bar_updates=r["bar_updates"],history_ready=60 in r["ready"])
                 # Provider-weighted price over retained completed bars only.
                 # No fallback for missing turnover or incomplete volume fields.
-                weighted=[b for b in bars.values() if b["t"]+60<=now]
-                volume_complete=bool(weighted) and all(b.get("v") is not None and b.get("value") is not None for b in weighted)
-                total_volume=sum(b["v"] for b in weighted) if volume_complete else 0
-                item["history_vwap"]=sum(b["value"] for b in weighted)/total_volume if total_volume>0 else None
-                item["history_vwap_bars"]=len(weighted) if total_volume>0 else 0
+                item["history_vwap"]=vwap
+                item["history_vwap_bars"]=vwap_count
+                item["bar_receipt_age_s"]=bar_age
+                item["missing_bar_intervals"]=gaps
                 if with_series:
                     item.update(bars=self.series(bars,60,now),micro_bars=self.series(r["micro_bars"],30,now))
                 if i.key in flow:
                     f=flow[i.key]
                     item['flow']=f
                     book=f['book']
-                    if book['fresh']:
+                    if self.running and book['fresh']:
                         item.update(bid=book['bid'],ask=book['ask'])
                         checks[4].update(status='good',detail=f"Synchronized book; spread {book['spread']:.6g}")
                 instruments.append(item)
@@ -229,7 +256,7 @@ class NativeDashboardState:
                              live_price_event_utc=utc(t['event_epoch']),live_price_age_s=t['event_age_s'],
                              live_price_received_utc=utc(t['received_epoch']),live_price_usable=True,
                              live_price_arrival_lag_s=t['arrival_lag_s'])
-                if f['book']['fresh']:
+                if self.running and f['book']['fresh']:
                     quotes[k].update(bid=f['book']['bid'],ask=f['book']['ask'])
             for i in instruments:
                 q=quotes[i["key"]]
@@ -239,7 +266,7 @@ class NativeDashboardState:
             for key,perp in (("gold","gold_perp"),("btc","btc_perp")):
                 if key in quotes and perp in quotes:
                     comparisons[key]=basis(quotes[key],quotes[perp])
-            payload=dict(instruments=instruments,quotes=quotes,orderflow=flow,basis=comparisons,connected=any(q["status"] in ("LIVE","UNVERIFIED") for q in quotes.values()),
+            payload=dict(instruments=instruments,quotes=quotes,orderflow=flow,basis=comparisons,connected=self.running and any(q["status"] in ("LIVE","UNVERIFIED") or q["live_price_usable"] for q in quotes.values()),
                 mode="native_push",reason=self.reason,history_source="takeprofit_native",micro_enabled=self.micro,
                 history_ready=sum(i["history_ready"] for i in instruments),generated_utc=utc(now),
                 uptime_seconds=time.monotonic()-self.started)
