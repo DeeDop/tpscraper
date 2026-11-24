@@ -1,4 +1,4 @@
-"""Loopback dashboard and predictor API, backed by TakeProfit snapshot polling."""
+"""Loopback dashboard and predictor API with native TakeProfit streams by default."""
 import argparse
 import json
 import sqlite3
@@ -12,6 +12,8 @@ import httpx
 
 from .__main__ import probe
 from .dashboard_state import DashboardState
+from .native_state import NativeDashboardState
+from .native_collect import collect_native
 from .history_cache import HistoryCache
 from .instruments import WATCHLISTS, Instrument
 from .local_chrome import LocalChromeAuth, open_chrome
@@ -55,7 +57,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             try:
                 while not self.stop.is_set():
                     now=time.monotonic()
-                    full=now-last_full>=5
+                    full=now-last_full>=2
                     payload=self.state.snapshot(full)
                     if full:
                         last_full=now
@@ -64,7 +66,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     # Compatible quotes event for headless consumers.
                     self.wfile.write(("event: quotes\ndata: "+json.dumps(self.quote_payload(payload),allow_nan=False)+"\n\n").encode())
                     self.wfile.flush()
-                    self.stop.wait(1)
+                    self.stop.wait(0.5)
             except OSError:
                 pass
             return
@@ -75,8 +77,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
         elif route=="/api/health":
             data=self.state.snapshot(False)
             payload=dict(connected=data["connected"],mode=data["mode"],reason=data["reason"],
-                         instruments=len(data["quotes"]),usable_count=0,
-                         receiving=sum(q["status"]=="UNVERIFIED" for q in data["quotes"].values()))
+                         instruments=len(data["quotes"]),usable_count=sum(q["usable_short_term"] for q in data["quotes"].values()),
+                         receiving=sum(q["status"] in ("LIVE","UNVERIFIED") for q in data["quotes"].values()),
+                         history_ready=data.get("history_ready",0))
         else:
             self.send_error(404)
             return
@@ -132,8 +135,10 @@ def main(argv=None):
     p.add_argument("--host",choices=("127.0.0.1",),default="127.0.0.1")
     p.add_argument("--interval",type=float,default=15,help="Minimum seconds per full watchlist sweep")
     p.add_argument("--requests-per-second",type=float,default=1,help="Global sequential request cap (1–3; increase only if provider permits)")
+    p.add_argument("--snapshot",action="store_true",help="Legacy polling mode instead of native streams")
+    p.add_argument("--native-30s",action="store_true",help="Optional extra 30-second candle subscription per instrument")
     p.add_argument("--no-cache",action="store_true",help="Do not persist or restore local sampled bars")
-    p.add_argument("--history",type=int,default=360,help="Local 1-minute bar retention")
+    p.add_argument("--history",type=int,default=360,help="Requested native one-minute history count (default 360); legacy cache retention in minutes")
     p.add_argument("--resolution",choices=("1",),default="1",help="Local base bars are one minute")
     p.add_argument("--no-browser",action="store_true")
     p.add_argument("--local-chrome",action="store_true",help="Regular Chrome authorization (default)")
@@ -165,7 +170,7 @@ def main(argv=None):
             print(str(exc)+" Continuing in memory only.")
     auth=LocalChromeAuth(store=store,opener=lambda:open_chrome(args.chrome_profile))
     cache=None
-    if not args.no_cache:
+    if args.snapshot and not args.no_cache:
         try:
             cache=HistoryCache()
             cache.prune()
@@ -174,14 +179,19 @@ def main(argv=None):
                 cache.close()
             cache=None
             print("Local sample cache unavailable; continuing in memory.")
-    try:
-        state=DashboardState(instruments,args.history,max(args.interval,len(instruments)/args.requests_per_second),cache=cache)
-    except (OSError,sqlite3.Error):
-        if cache is not None:
-            cache.close()
-        cache=None
-        state=DashboardState(instruments,args.history,max(args.interval,len(instruments)/args.requests_per_second))
-    print(f"Restored {state.cached_bars} local one-minute bars; no exchange backfill yet.",flush=True)
+    if args.snapshot:
+        try:
+            state=DashboardState(instruments,args.history,max(args.interval,len(instruments)/args.requests_per_second),cache=cache)
+        except (OSError,sqlite3.Error):
+            if cache is not None:
+                cache.close()
+            cache=None
+            state=DashboardState(instruments,args.history,max(args.interval,len(instruments)/args.requests_per_second))
+        print(f"Restored {state.cached_bars} local one-minute bars.",flush=True)
+    else:
+        if args.history>1000 or (args.native_30s and args.history>500):
+            p.error("Native history max 1000 minutes, or 500 with 30-second streams")
+        state=NativeDashboardState(instruments,args.history,args.native_30s)
     stop=threading.Event()
     server=None
     thread=None
@@ -195,11 +205,17 @@ def main(argv=None):
         thread.start()
         url=f"http://{args.host}:{args.port}/"
         print("TakeProfit dashboard:",url,flush=True)
-        print(f"Snapshot polling; target sweep {max(args.interval,len(instruments)/args.requests_per_second):g}s; global cap {args.requests_per_second:g} requests/s. Unverified prices. Ctrl+C to stop.",flush=True)
+        if args.snapshot:
+            print(f"Legacy snapshot polling; target sweep {max(args.interval,len(instruments)/args.requests_per_second):g}s. Ctrl+C to stop.",flush=True)
+        else:
+            print(f"Native push: {len(instruments)} instruments, {args.history} initial 1m bars per instrument, 30s={args.native_30s}. Ctrl+C to stop.",flush=True)
         if not args.no_browser:
             webbrowser.open(url)
-        with httpx.Client(http2=True,timeout=10,follow_redirects=False,trust_env=False) as client:
-            collect(state,auth,stop,args.interval,client,requests_per_second=args.requests_per_second)
+        if args.snapshot:
+            with httpx.Client(http2=True,timeout=10,follow_redirects=False,trust_env=False) as client:
+                collect(state,auth,stop,args.interval,client,requests_per_second=args.requests_per_second)
+        else:
+            collect_native(state,auth,stop)
         if not stop.is_set():
             print("Dashboard remains available for inspection; Ctrl+C to exit.",flush=True)
             while not stop.wait(1):
