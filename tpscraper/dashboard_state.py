@@ -38,16 +38,27 @@ def returns(bars):
 
 
 class DashboardState:
-    def __init__(self, instruments, history=360, interval=15):
+    def __init__(self, instruments, history=360, interval=15, cache=None):
         self.instruments=tuple(instruments)
         self.history=history
         self.interval=interval
         self.lock=threading.RLock()
+        self.cache=cache
         self.started=time.monotonic()
         self.running=True
         self.reason="starting"
         self.data={i.key:dict(last=None, first=None, received=None, ticks=0, changes=0,
                               outcome="awaiting_quote", details={}, latency_ms=None, bars=OrderedDict(), micro=OrderedDict()) for i in instruments}
+
+        self.cached_bars=0
+        if cache is not None:
+            for i in instruments:
+                row=self.data[i.key]
+                for field,period in (("bars",60),("micro",30)):
+                    loaded=cache.load(i.symbol,period,history)
+                    row[field].update((b["t"],b) for b in loaded)
+                    if field=="bars":
+                        self.cached_bars+=len(loaded)
 
     def ingest(self,key,result,now=None):
         now=time.time() if now is None else now
@@ -83,6 +94,17 @@ class DashboardState:
                        latency_ms=round(result.get("elapsed_s",0)*1000))
             add_bar(row["bars"],now,p,60,self.history)
             add_bar(row["micro"],now,p,30,self.history*2)
+            if self.cache is not None:
+                import sqlite3
+                symbol=next(i.symbol for i in self.instruments if i.key==key)
+                try:
+                    for field,period in (("bars",60),("micro",30)):
+                        bucket=int(now//period)*period
+                        if bucket in row[field]:
+                            self.cache.save(symbol,period,row[field][bucket])
+                except (sqlite3.Error,OSError,ValueError):
+                    print("Local sample cache write failed; continuing in memory.",flush=True)
+                    self.cache=None
             self.reason="receiving snapshots"
             return True
 
@@ -129,7 +151,7 @@ class DashboardState:
                     usable_short_term=False, outcome=r["outcome"], latency_ms=r["latency_ms"], samples=r["ticks"], price_changes=r["changes"], candidate_details=dict(d))
             connected=self.running and any(q["status"]=="UNVERIFIED" for q in quotes.values())
             payload=dict(instruments=instruments,quotes=quotes,connected=connected,mode="snapshot_unverified",
-                         reason=self.reason,generated_utc=utc(now),uptime_seconds=time.monotonic()-self.started)
+                         reason=self.reason,cached_bars=self.cached_bars,history_source="local_samples",generated_utc=utc(now),uptime_seconds=time.monotonic()-self.started)
             if with_series:
                 keys=[i.key for i in self.instruments]
                 rs=[returns(i["bars"]) for i in instruments]
