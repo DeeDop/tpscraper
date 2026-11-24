@@ -90,6 +90,13 @@ class DashboardState:
                     detail[k]=v
             except (KeyError,ValueError,TypeError,OverflowError):
                 detail={}
+            for k in ("candidate_volume","candidate_turnover"):
+                try:
+                    v=float(result.get("candidate_details",{})[k])
+                    if math.isfinite(v) and v>=0:
+                        detail[k]=v
+                except (KeyError,ValueError,TypeError,OverflowError):
+                    pass
             row.update(last=p,received=now,ticks=row["ticks"]+1,details=detail,
                        latency_ms=round(result.get("elapsed_s",0)*1000))
             add_bar(row["bars"],now,p,60,self.history)
@@ -125,11 +132,12 @@ class DashboardState:
                 success=r["outcome"]=="candidate_price_unverified"
                 status="warning" if success and fresh and self.running else "serious" if r["last"] is not None else "unknown"
                 d=r["details"]
+                has_range=all(k in d for k in ("open","high","low","prev_close"))
                 checks=[
                     dict(id="feed",status=status,detail="Unverified snapshot" if success else r["outcome"]),
                     dict(id="fresh",status="warning" if fresh else "unknown",detail=f"Receipt {age:.1f}s ago; exchange time unknown" if age is not None else "No quote"),
                     dict(id="cross",status="unknown",detail="Independent candle feed not decoded"),
-                    dict(id="range",status="warning" if d else "unknown",detail="Candidate session range consistent" if d else "Session range unavailable"),
+                    dict(id="range",status="warning" if has_range else "unknown",detail="Candidate session range consistent" if has_range else "Session range unavailable"),
                     dict(id="spread",status="unknown",detail="Bid/ask unavailable"),
                     dict(id="bars",status="warning" if r["bars"] else "unknown",detail="Local sampled bars only"),
                 ]
@@ -137,10 +145,10 @@ class DashboardState:
                 item=dict(key=i.key,symbol=i.symbol,name=i.name,group=i.group,slot=i.slot,decimals=i.decimals,
                           last=last,change=d.get("change",last-first if first is not None else None),
                           change_pct=d.get("change_pct",(last/first-1)*100 if first else None),
-                          change_basis="candidate_session" if d else "since_start",
+                          change_basis="candidate_session" if "change" in d else "since_start",
                           ticks=r["ticks"],status=status,checks=checks,delay_seconds=None,
                           update_mode="snapshot_unverified",bid=None,ask=None,open=d.get("open"),high=d.get("high"),low=d.get("low"),
-                          prev_close=d.get("prev_close"),volume=None,range_position=(last-d["low"])/(d["high"]-d["low"]) if d and d["high"]>d["low"] else None,realized_vol_pct=None,bar_count=len(r["bars"]))
+                          prev_close=d.get("prev_close"),volume=None,candidate_volume=d.get("candidate_volume"),candidate_turnover=d.get("candidate_turnover"),range_position=(last-d["low"])/(d["high"]-d["low"]) if has_range and d["high"]>d["low"] else None,realized_vol_pct=None,bar_count=len(r["bars"]))
                 if with_series:
                     item.update(bars=[dict(b) for b in r["bars"].values()],micro_bars=[dict(b) for b in r["micro"].values()])
                 instruments.append(item)
