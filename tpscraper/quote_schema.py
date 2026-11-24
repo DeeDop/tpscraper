@@ -79,7 +79,7 @@ def candidate_price(data):
 
 def candidate_details(data):
     """Observed fixed-point fields; only emit internally consistent candidates.
-    No timestamp, bid/ask or volume schema is established.
+    No timestamp or bid/ask schema is established; volume/turnover are candidates.
     """
     def dec(path):
         n=at(data,path+(1,),0)
@@ -104,7 +104,18 @@ def candidate_details(data):
             return {}
         if abs((last-prev)/prev*100-pct)>Decimal("0.02"):
             return {}
-        return {k:str(v) for k,v in dict(open=op,high=hi,low=lo,prev_close=prev,
+        out={k:str(v) for k,v in dict(open=op,high=hi,low=lo,prev_close=prev,
                                        change=change,change_pct=pct).items()}
+        # In the Nov 24 Gold samples these two fields rise together, with
+        # delta(turnover)/delta(volume) equal to the observed quote price.
+        # BTC samples show a similar relationship; units/window unverified.
+        try:
+            volume=dec(prefix+(12,))
+            turnover=dec(prefix+(13,))
+            if volume>=0 and turnover>=0 and (volume>0 or turnover==0):
+                out.update(candidate_volume=str(volume),candidate_turnover=str(turnover))
+        except (ValueError,ArithmeticError):
+            pass
+        return out
     except (ValueError,ArithmeticError):
         return {}
