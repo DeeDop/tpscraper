@@ -1,0 +1,20 @@
+# indie:lang_version = 5
+from indie import indicator, MainContext, sec_context, TimeFrame, plot, color
+
+@sec_context
+def Secondary(self):
+    return self.close[0], self.volume[0], self.time[0]
+
+@indicator('TP Probe 4 - Secondary Feed')
+@plot.line(title='Secondary close', color=color.BLUE)
+@plot.line(title='Secondary volume')
+@plot.line(title='Secondary bar time')
+class Main(MainContext):
+    def __init__(self):
+        self._c, self._v, self._t = self.calc_on(
+            Secondary, exchange='CXBNCE', ticker='BTC/USDT',
+            time_frame=TimeFrame.from_str('1m'),
+        )
+
+    def calc(self):
+        return self._c[0], self._v[0], self._t[0]
