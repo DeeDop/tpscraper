@@ -136,10 +136,18 @@ class FlowState:
             if kind=="heatmap":
                 self.heat={}
 
+    def pause(self):
+        with self.lock:
+            terminal={"restricted","disabled_until_restart","no_data","unavailable","unsupported",
+                      "cached_no_data","cached_unavailable","cached_unsupported"}
+            for kind,reason in tuple(self.states.items()):
+                if reason not in terminal and "restriction" not in reason:
+                    self.status(kind,"paused")
+
     def ingest(self,kind,rows,now=None):
         now=time.time() if now is None else now
         if not rows:
-            return
+            return False
         with self.lock:
             accepted=False
             for r in rows:
@@ -189,7 +197,7 @@ class FlowState:
                 elif kind=="tpo":
                     if r["kind"]=="profile":
                         self.tpo=dict(r)
-                        self.tpo["rows_verified"]=True
+                        self.tpo["rows_verified"]=bool(r.get("levels"))
                         accepted=True
                         self.tpo["levels"]=[dict(x) for x in r.get("levels",[])]
                         self.tpo["block_infos"]=list(r.get("block_infos",[]))
