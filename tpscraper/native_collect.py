@@ -61,7 +61,8 @@ def collect_native(state,auth,stop):
                     report("connecting" if attempt==1 else "reconnecting")
                     state.stream_event(label,"attempt")
                     try:
-                        stream=messages(client,service,payload,headers)
+                        current_payload=payload() if callable(payload) else payload
+                        stream=messages(client,service,current_payload,headers)
                         try:
                             for raw in stream:
                                 if cycle.is_set() or stop.is_set():
@@ -168,13 +169,15 @@ def collect_native(state,auth,stop):
                 active={}
                 decoders={"trades":trade_rows,"footprint":lambda raw:footprint_rows(raw,full=True),
                           "orderbook":lambda raw:book_summary(raw,full=True),
-                          "heatmap":lambda raw:book_summary(raw,heat=True,full=True),"tpo":tpo_rows}
+                          "heatmap":lambda raw:book_summary(raw,heat=True,full=True),"tpo":lambda raw:tpo_rows(raw,full=True)}
 
                 def launch_next():
                     key,kind=pending.pop(0)
                     flow=state.flows[key]
                     provider,symbol=flow.symbol.split(":",1)
-                    service,payload,_=plans(symbol,provider)[kind]
+                    service,_,_=plans(symbol,provider)[kind]
+                    def payload():
+                        return plans(symbol,provider)[kind][1]
                     def apply(rows):
                         flow.ingest(kind,rows)
                         return True
