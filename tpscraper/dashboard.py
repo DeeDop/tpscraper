@@ -152,11 +152,14 @@ def main(argv=None):
     p.add_argument("--no-browser",action="store_true")
     p.add_argument("--local-chrome",action="store_true",help="Regular Chrome authorization (default)")
     p.add_argument("--remember",action="store_true")
+    p.add_argument("--auto-renew",action="store_true",help="Optional paired Chrome renewal; only with provider permission")
     p.add_argument("--chrome-profile")
     p.add_argument("--ticker",action="append",default=[],help="Override preset with repeatable PROVIDER:TICKER values")
     args=p.parse_args(argv)
     if not 1<=args.requests_per_second<=3 or not 1<=args.interval<=3600 or not 1<=args.history<=1440 or not 1024<=args.port<=65535:
         p.error("Invalid interval, port or history")
+    if args.auto_renew and (args.snapshot or not args.authorized):
+        p.error("--auto-renew requires native mode and --authorized")
     if args.orderflow and (args.snapshot or not args.authorized):
         p.error("--orderflow requires native mode and --authorized")
     if args.record_flow and not args.orderflow:
@@ -183,7 +186,7 @@ def main(argv=None):
             store=CredentialStore()
         except StoreError as exc:
             print(str(exc)+" Continuing in memory only.")
-    auth=LocalChromeAuth(store=store,opener=lambda:open_chrome(args.chrome_profile))
+    auth=None
     cache=None
     recorder=None
     if args.snapshot and not args.no_cache:
@@ -218,6 +221,11 @@ def main(argv=None):
     thread=None
     try:
         # Authorize on main thread, before starting server.
+        if args.auto_renew:
+            from .browser_renew import BrowserRenewAuth
+            auth=BrowserRenewAuth(store=store)
+        else:
+            auth=LocalChromeAuth(store=store,opener=lambda:open_chrome(args.chrome_profile))
         auth.headers()
         handler=partial(DashboardHandler,state,stop)
         server=ThreadingHTTPServer((args.host,args.port),handler)
@@ -252,7 +260,8 @@ def main(argv=None):
             if thread is not None:
                 server.shutdown()
             server.server_close()
-        auth.close()
+        if auth is not None:
+            auth.close()
         if cache is not None:
             cache.close()
         if recorder is not None and getattr(state,"recorder",None) is not None:
