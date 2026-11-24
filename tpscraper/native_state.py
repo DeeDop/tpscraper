@@ -6,6 +6,7 @@ from statistics import correlation, stdev
 from .dashboard_state import utc, returns
 from .flow_state import FlowState
 from .capabilities import CapabilityCache
+from .analytics import aligned_lags, basis
 
 
 class NativeDashboardState:
@@ -130,13 +131,13 @@ class NativeDashboardState:
         if self.recorder is None:
             return
         try:
-            self.recorder.write_snapshot(self.snapshot(True))
+            self.recorder.write_snapshot(self.snapshot(True,with_analysis=False))
         except (OSError,RuntimeError):
             print('Flow recording disabled after local write error.',flush=True)
             self.recorder.close()
             self.recorder=None
 
-    def snapshot(self,with_series=True):
+    def snapshot(self,with_series=True,with_analysis=True):
         flow=self.flow_snapshot(False)
         with self.lock:
             now=time.time()
@@ -234,11 +235,15 @@ class NativeDashboardState:
                 q=quotes[i["key"]]
                 i.update(live_price=q["live_price"],live_price_source=q["live_price_source"],
                          live_price_age_s=q["live_price_age_s"],live_price_usable=q["live_price_usable"])
-            payload=dict(instruments=instruments,quotes=quotes,orderflow=flow,connected=any(q["status"] in ("LIVE","UNVERIFIED") for q in quotes.values()),
+            comparisons={}
+            for key,perp in (("gold","gold_perp"),("btc","btc_perp")):
+                if key in quotes and perp in quotes:
+                    comparisons[key]=basis(quotes[key],quotes[perp])
+            payload=dict(instruments=instruments,quotes=quotes,orderflow=flow,basis=comparisons,connected=any(q["status"] in ("LIVE","UNVERIFIED") for q in quotes.values()),
                 mode="native_push",reason=self.reason,history_source="takeprofit_native",micro_enabled=self.micro,
                 history_ready=sum(i["history_ready"] for i in instruments),generated_utc=utc(now),
                 uptime_seconds=time.monotonic()-self.started)
-        if with_series:
+        if with_series and with_analysis:
             payload["diagnostics"]=self.diagnostic_snapshot()
             # Compute outside the lock so streaming updates aren't blocked by correlation.
             keys=[i.key for i in self.instruments]
@@ -255,4 +260,8 @@ class NativeDashboardState:
                         mr.append(None)
                 matrix.append(mr); counts.append(cr)
             payload["correlation"]=dict(keys=keys,matrix=matrix,counts=counts)
+            anchor="gold" if "gold" in keys else "btc" if "btc" in keys else keys[0] if keys else None
+            if anchor:
+                target=rs[keys.index(anchor)]
+                payload["lead_lag"]=dict(target=anchor,rows={k:aligned_lags(r,target) for k,r in zip(keys,rs) if k!=anchor})
         return payload
