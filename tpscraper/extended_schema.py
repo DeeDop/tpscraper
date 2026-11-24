@@ -52,7 +52,8 @@ def levels(f,n):
     result=[]
     for level in many(f,n):
         p,q=dec(level,1),dec(level,2)
-        # Omitted quantity is unknown until the provider deletion semantics are validated.
+        # Keep missing quantity nullable for heatmap; OrderBook applies the
+        # captured worker convention (missing delta size -> zero/delete).
         if p is None or p<=0 or (q is not None and q<0):
             raise ValueError("Invalid price level")
         result.append(dict(price=p,size=q,max_size=dec(level,3),twa_size=dec(level,4)))
@@ -149,9 +150,10 @@ def tpo_rows(raw,full=False):
         if get(p,10,2) is not None:
             row["end"]=ts(p,10)
         if full:
-            # Do not guess row-diff application or nested block-append semantics.
-            row["row_diff_count"]=len(many(p,5))
-            row["block_append_count"]=len(many(p,6))
+            # TpoPriceRowDiff.added_block_indexes; do not infer execution volume.
+            row["row_diffs"]=[dict(price=dec(r,1),block_indexes=uints(r,2)) for r in many(p,5)]
+            # TpoBlockInfoAppend.first_block_index and block_infos.
+            row["block_appends"]=[dict(index=get(a,1,0,0),offsets=[get(b,1,0,0) for b in many(a,2)]) for a in many(p,6)]
         return [row]
     return []
 
