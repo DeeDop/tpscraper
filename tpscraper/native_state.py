@@ -103,6 +103,7 @@ class NativeDashboardState:
             r=self.data[key]
             if item.get("status"):
                 r["bar_state"][period]="provider status "+str(item["status"])
+                r["ready"].discard(period)
                 return
             b=item.get("bar")
             if b is not None:
@@ -114,7 +115,7 @@ class NativeDashboardState:
                 # Stream delivers complete replacement candle, not incremental volume.
                 target[b["t"]]=dict(b)
                 r["bar_received"][period]=time.time()
-                if period==60:
+                if period==60 and b["t"]+60<=time.time():
                     r["bar_revision"]+=1
                 limit=self.history*(2 if period==30 else 1)
                 if len(target)>limit:
@@ -129,8 +130,7 @@ class NativeDashboardState:
             self.running=False
             self.reason=reason
         for flow in self.flows.values():
-            for kind in tuple(flow.states):
-                flow.status(kind,"stopped")
+            flow.pause()
 
     @staticmethod
     def series(target,period,now):
@@ -214,7 +214,7 @@ class NativeDashboardState:
                     bid=None,ask=None,open=d.get("open"),high=high,low=low,prev_close=d.get("prev_close"),
                     volume=d.get("volume"),candidate_volume=None,turnover=d.get("value"),
                     range_position=(last-low)/(high-low) if has_range and high>low else None,
-                    realized_vol_pct=vol,bar_count=len(bars),bar_updates=r["bar_updates"],history_ready=60 in r["ready"])
+                    realized_vol_pct=vol,bar_count=len(bars),bar_updates=r["bar_updates"],history_ready=self.running and 60 in r["ready"])
                 # Provider-weighted price over retained completed bars only.
                 # No fallback for missing turnover or incomplete volume fields.
                 item["history_vwap"]=vwap
@@ -239,6 +239,7 @@ class NativeDashboardState:
                     daily_session=dict(r["sessions"].get("daily_session",{})),
                     bid=item['bid'],ask=item['ask'],spread=(item['ask']-item['bid']) if item['ask'] is not None and item['bid'] is not None else None,
                     volume=item['volume'],turnover=item['turnover'],history_vwap=item['history_vwap'],history_vwap_bars=item['history_vwap_bars'],
+                    bar_receipt_age_s=bar_age,missing_bar_intervals=gaps,history_ready=item["history_ready"],
                     volume_semantics='tick_activity' if i.symbol.startswith(('FXPPST:','FXEXTS:')) else 'provider_reported')
             for q in quotes.values():
                 q.update(live_price=q["last"] if q["usable_short_term"] else None,
