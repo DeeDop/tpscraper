@@ -523,7 +523,7 @@ function renderTiles(payload) {
         ${signed(inst.change, inst.decimals)} (${signed(inst.change_pct, 2)}%)
       </div>
       ${spark}
-      <div class="tile-extra">${inst.volume != null ? `<span>Volume ${compact(inst.volume)}</span>` : ""}${inst.bid != null && inst.ask != null ? `<span>Bid ${fmt(inst.bid,inst.decimals)}</span><span>Ask ${fmt(inst.ask,inst.decimals)}</span><span>Spread ${fmt(inst.ask-inst.bid,inst.decimals)}</span>` : ""}</div>
+      <div class="tile-extra">${inst.live_price_usable ? `<span class="up">Timed price ${fmt(inst.live_price,inst.decimals)} · ${fmt(inst.live_price_age_s,2)}s · ${escapeHtml(inst.live_price_source==="timestamped_trade_event"?"trade event":"quote")}</span>` : inst.update_mode==="native_push" ? `<span>Price timestamp unverified</span>` : ""}${inst.volume != null ? `<span>Volume ${compact(inst.volume)}</span>` : ""}${inst.bid != null && inst.ask != null ? `<span>Bid ${fmt(inst.bid,inst.decimals)}</span><span>Ask ${fmt(inst.ask,inst.decimals)}</span><span>Spread ${fmt(inst.ask-inst.bid,inst.decimals)}</span>` : ""}</div>
       <div class="tile-foot">
         <span class="s-${inst.status}"><span class="icon">${ICONS[inst.status]}</span></span>
         <span>${mode} · ${inst.change_basis === "native_session" ? "session" : inst.change_basis === "candidate_session" ? "session?" : "since start"}</span>
@@ -1197,6 +1197,8 @@ function renderFlow() {
   }).join("");
   const items=[];
   const add=(name,value,detail="")=>{if(value!=null)items.push([name,value,detail]);};
+  if(inst.live_price_usable)add("Timestamped live price",fmt(inst.live_price,d),inst.live_price_source+" · "+fmt(inst.live_price_age_s,2)+"s old");
+  if(f.latest_trade?.fresh)add("Event arrival lag",fmt(f.latest_trade.arrival_lag_s*1000,0)+" ms","Requires synchronized clocks");
   if(inst.volume!=null)add("Session volume",compact(inst.volume),"Provider units");
   if(inst.turnover!=null)add("Session turnover",compact(inst.turnover),"Provider units");
   const b=f.book||{};
