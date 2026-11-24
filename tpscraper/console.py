@@ -37,12 +37,13 @@ def format_sample(result, previous=None, now=None):
     return f"{prefix} | {price:f} | {change} | {latency} ms | UNVERIFIED SNAPSHOT", price
 
 
-def monitor(auth, symbol, provider, interval=15, count=0, client=None, emit=print, sleep=time.sleep, notify=None):
+def monitor(auth, symbol, provider, interval=15, count=0, client=None, emit=print, sleep=time.sleep, notify=None, clock=time.monotonic):
     notify = notify or emit
     previous = None
     attempts = 0
     failures = 0
     while not count or attempts < count:
+        started = clock()
         result = probe("quote", 10, auth, symbol, provider, client=client)
         line, price = format_sample(result, previous)
         emit(line)
@@ -60,7 +61,12 @@ def monitor(auth, symbol, provider, interval=15, count=0, client=None, emit=prin
             break
         if count and attempts >= count:
             break
-        sleep(interval * (2 ** failures))
+        if failures:
+            sleep(interval * (2 ** failures))
+        else:
+            # Use start-to-start cadence, but never burst to catch up after a slow request.
+            delay = interval - (clock() - started)
+            sleep(delay if delay > 0 else interval)
     return attempts
 
 
