@@ -27,6 +27,9 @@ def probe(service, seconds, auth=None, symbol="XAU/USD", provider="FXPPST", clie
         headers={"content-type":"application/grpc-web+proto","x-grpc-web":"1"}
         if auth:
             headers.update(auth.headers())
+        result["authorization_elapsed_s"]=round(time.monotonic()-start,3)
+        # Human approval / Chrome login is not network observation time.
+        start=time.monotonic()
         payload=quote_request(symbol,provider) if service=="quote" else b""
         with (nullcontext(client) if client is not None else httpx.Client(http2=True, timeout=min(seconds,10), follow_redirects=False, trust_env=False)) as connection:
             with connection.stream("POST",BASE+SERVICES[service],content=frame(payload),headers=headers) as response:
@@ -40,10 +43,12 @@ def probe(service, seconds, auth=None, symbol="XAU/USD", provider="FXPPST", clie
                     status=response.headers.get("grpc-status")
                     if status and status.isdigit():
                         result["grpc_status"]=int(status)
+                    trailer_received=False
                     for chunk in response.iter_bytes():
                         result["chunks"]+=1
                         for flags,body in decoder.feed(chunk):
                             if flags==128:
+                                trailer_received=True
                                 for line in body.splitlines():
                                     if line.lower().startswith(b"grpc-status:"):
                                         value=line.split(b":",1)[1].strip()
@@ -57,6 +62,10 @@ def probe(service, seconds, auth=None, symbol="XAU/USD", provider="FXPPST", clie
                                         candidates.append(candidate_price(body))
                                     except ValueError:
                                         result["schema_mismatch"]=True
+                        # A completed gRPC trailer takes precedence over the time limit.
+                        if trailer_received:
+                            decoder.finish()
+                            break
                         if time.monotonic()-start>=seconds:
                             result["outcome"]="observation_limit"
                             break
