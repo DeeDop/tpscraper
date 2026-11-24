@@ -169,8 +169,31 @@ class FlowState:
                 elif kind=="tpo":
                     if r["kind"]=="profile":
                         self.tpo=dict(r)
+                        self.tpo["levels"]=[dict(x) for x in r.get("levels",[])]
+                        self.tpo["block_infos"]=list(r.get("block_infos",[]))
                     elif self.tpo and r.get("start")==self.tpo.get("start"):
-                        self.tpo.update({k:v for k,v in r.items() if k!="kind"})
+                        self.tpo.update({k:v for k,v in r.items() if k not in ("kind","row_diffs","block_appends")})
+                        levels={x["price"]:dict(x) for x in self.tpo.get("levels",[]) if x["price"] is not None}
+                        for diff in r.get("row_diffs",[]):
+                            if diff["price"] is None:
+                                continue
+                            level=levels.setdefault(diff["price"],dict(price=diff["price"],block_indexes=[],sell_volume=None,buy_volume=None))
+                            level["block_indexes"]=sorted(set(level["block_indexes"])|set(diff["block_indexes"]))
+                            for key in ("sell_volume","buy_volume"):
+                                if diff[key] is not None:
+                                    level[key]=(level[key] or 0)+diff[key]
+                        self.tpo["levels"]=sorted(levels.values(),key=lambda x:x["price"])
+                        infos=list(self.tpo.get("block_infos",[]))
+                        for a in r.get("block_appends",[]):
+                            index=a["index"]
+                            if index+len(a["offsets"])>10000:
+                                raise ValueError("TPO block index too large")
+                            if len(infos)<index+len(a["offsets"]):
+                                infos.extend([None]*(index+len(a["offsets"])-len(infos)))
+                            infos[index:index+len(a["offsets"])]=a["offsets"]
+                        self.tpo["block_infos"]=infos
+                        self.tpo["price_rows"]=len(levels)
+                        self.tpo["blocks"]=len(infos)
             self.states[kind]="receiving"
             self.received[kind]=now
 
@@ -235,6 +258,8 @@ class FlowState:
             if details:
                 out["recent_trades"]=list(recent[-100:])
                 out["tpo"]=dict(self.tpo)
+                out["tpo"]["levels"]=[dict(x) for x in self.tpo.get("levels",[])]
+                out["tpo"]["block_infos"]=list(self.tpo.get("block_infos",[]))
                 out["footprint"]["profiles"]=fp[-30:]
                 out["heatmap"]["profiles"]=[self.heat[t] for t in sorted(self.heat)[-30:]]
             return out
