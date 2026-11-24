@@ -198,8 +198,9 @@ def main(argv=None):
     p.add_argument("--remember",action="store_true")
     renewal=p.add_mutually_exclusive_group()
     renewal.add_argument("--auto-renew",action="store_true",help="Legacy paired Chrome extension renewal")
-    renewal.add_argument("--browser-renew",action="store_true",help="Consent-based dedicated Chrome renewal without extension")
-    p.add_argument("--browser-login",action="store_true",help="Sign in again in dedicated Chrome; requires --browser-renew")
+    renewal.add_argument("--browser-renew",action="store_true",help="Use your existing signed-in Chrome with native connection permission")
+    renewal.add_argument("--dedicated-browser-renew",action="store_true",help="Optional separate Chrome profile")
+    p.add_argument("--browser-login",action="store_true",help="Sign in again in dedicated Chrome; requires --dedicated-browser-renew")
     p.add_argument("--chrome-profile")
     p.add_argument("--ticker",action="append",default=[],help="Override preset with repeatable PROVIDER:TICKER values")
     p.add_argument("--workspace",action="store_true",help="Use watchlist saved from the dashboard; fallback to selected preset if none exists")
@@ -210,12 +211,12 @@ def main(argv=None):
         p.error("--flow-budget must be 1-60")
     if args.refresh_capabilities and not args.orderflow:
         p.error("--refresh-capabilities requires --orderflow")
-    if (args.auto_renew or args.browser_renew) and (args.snapshot or not args.authorized):
+    if (args.auto_renew or args.browser_renew or args.dedicated_browser_renew) and (args.snapshot or not args.authorized):
         p.error("Browser renewal requires native mode and --authorized")
-    if args.browser_login and not args.browser_renew:
-        p.error("--browser-login requires --browser-renew")
-    if args.browser_renew and args.chrome_profile:
-        p.error("--browser-renew uses its own dedicated profile, not --chrome-profile")
+    if args.browser_login and not args.dedicated_browser_renew:
+        p.error("--browser-login requires --dedicated-browser-renew")
+    if (args.browser_renew or args.dedicated_browser_renew) and args.chrome_profile:
+        p.error("Browser renewal uses the connected browser context; --chrome-profile is for manual authorization")
     if args.orderflow and (args.snapshot or not args.authorized):
         p.error("--orderflow requires native mode and --authorized")
     if args.record_flow and not args.orderflow:
@@ -292,6 +293,9 @@ def main(argv=None):
     try:
         # Authorize on main thread, before starting server.
         if args.browser_renew:
+            from .existing_chrome import ExistingChromeAuth
+            auth=ExistingChromeAuth(store=store)
+        elif args.dedicated_browser_renew:
             from .dedicated_chrome import DedicatedChromeAuth
             auth=DedicatedChromeAuth(store=store,login=args.browser_login)
         elif args.auto_renew:
