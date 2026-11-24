@@ -31,12 +31,11 @@ class ReliabilityTests(unittest.TestCase):
         b.apply(book(1000.1,2,[level(100,1)],[],kind="update"),1000.1)
         self.assertEqual(b.summary(1000.1)["bid"],100)
 
-    def test_ambiguous_delete_invalidates_book(self):
+    def test_omitted_size_removes_level_as_in_worker(self):
         b=OrderBook()
-        b.apply(book(1000),1000)
-        with self.assertRaises(BookGap):
-            b.apply(book(1000.1,2,[level(99,None)],[],kind="update"),1000.1)
-        self.assertFalse(b.summary(1000.1)["synchronized"])
+        b.apply(book(1000,bids=[level(99,2),level(98,3)]),1000)
+        b.apply(book(1000.1,2,[level(99,None)],[],kind="update"),1000.1)
+        self.assertEqual(b.summary(1000.1)["bid"],98)
 
     def test_explicit_zero_removes_level(self):
         b=OrderBook()
@@ -77,14 +76,16 @@ class ReliabilityTests(unittest.TestCase):
         self.assertEqual(q["last"],100)
         self.assertEqual(q["main_session"]["last"],100)
 
-    def test_tpo_unverified_diff_invalidates_rows(self):
+    def test_tpo_merges_block_indices_without_guessing_volume(self):
         f=FlowState("TEST:BTC")
         f.ingest("tpo",[dict(kind="profile",start=900,levels=[dict(price=99,block_indexes=[0])],block_infos=[0])],1000)
-        f.ingest("tpo",[dict(kind="diff",start=900,poc=100,row_diff_count=1)],1001)
+        f.ingest("tpo",[dict(kind="diff",start=900,poc=100,row_diffs=[dict(price=99,block_indexes=[0,1])],block_appends=[dict(index=1,offsets=[1800])])],1001)
         t=f.snapshot(1001,details=True)["tpo"]
         self.assertEqual(t["poc"],100)
-        self.assertFalse(t["rows_verified"])
-        self.assertEqual(t["levels"],[])
+        self.assertEqual(t["levels"][0]["block_indexes"],[0,1])
+        self.assertEqual(t["block_infos"],[0,1800])
+        self.assertFalse(t["volume_updates_verified"])
+        self.assertIsNone(t["levels"][0]["buy_volume"])
 
     def test_disconnect_clears_eligible_book_and_trade(self):
         s=NativeDashboardState(BTC,orderflow=True)
