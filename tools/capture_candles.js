@@ -9,8 +9,7 @@
   const entries = [];
   const limit = 2 * 1024 * 1024;
   const paths = new Set([
-    "/takeprofit.marketdata.external.candle.v1.CandleStreamApi/CandleStream",
-    "/takeprofit.marketdata.external.candle.v1.ExtrapolationApi/ListBars"
+    "/takeprofit.marketdata.external.candle.v1.CandleStreamApi/CandleStream"
   ]);
   const encode = bytes => {
     let s = "";
@@ -21,6 +20,7 @@
   const capture = async (response, row) => {
     if (!response.body) return;
     const reader = response.body.getReader();
+    row.reader = reader;
     try {
       while (!row.stopped && row.size < limit) {
         const {done,value} = await reader.read();
@@ -82,5 +82,5 @@
       delete window.tpCandleCapture;
     }
   };
-  console.log("Capture installed. Change Gold to 1 minute, then 5 minutes without refreshing. Run tpCandleCapture.status() and tpCandleCapture.save() in Console.");
+  console.log("CandleStream-only capture installed. Open a new chart or change symbol and timeframe without refreshing. Run tpCandleCapture.status() and tpCandleCapture.save() in Console.");
 })();
