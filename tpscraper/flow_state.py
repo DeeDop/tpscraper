@@ -47,6 +47,7 @@ class OrderBook:
                  exchange_timestamp=self.timestamp,age_s=age,bid=None,ask=None,spread=None,
                  bids=[],asks=[],imbalance={},bid_levels=len(self.bids),ask_levels=len(self.asks))
         if not fresh or not self.bids or not self.asks:
+            out["fresh"]=False
             return out
         # Full depth is maintained, but only bounded levels/features leave the API.
         if self.cached is None or now-self.computed>=0.5:
@@ -75,7 +76,7 @@ class OrderBook:
 class FlowState:
     def __init__(self,symbol):
         self.symbol=symbol
-        self.units="tick_activity" if symbol.startswith("FXPPST:") else "provider_trade_quantity"
+        self.units="tick_activity" if symbol.startswith(("FXPPST:","FXEXTS:")) else "provider_trade_quantity"
         self.lock=threading.RLock()
         self.book=OrderBook()
         self.trades=deque(maxlen=100000)
@@ -165,7 +166,8 @@ class FlowState:
             streams={}
             for k,v in self.states.items():
                 age=None if k not in self.received else now-self.received[k]
-                streams[k]=dict(status=v,receipt_age_s=age)
+                freshness="stale" if v=="receiving" and (age is None or age>5) else "live" if v=="receiving" else v
+                streams[k]=dict(status=freshness,connection_status=v,receipt_age_s=age)
             recent=[r for r in self.trades if now-60<=r["time"]<=now+2]
             latest=max((r["time"] for r in recent),default=None)
             windows={}
