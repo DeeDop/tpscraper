@@ -322,10 +322,10 @@ body { padding: clamp(9px,1.5vw,24px); }
 <details><summary>Per-stream diagnostics</summary><div class="scroll"><table id="diag-view"></table></div></details>
 </section>
 <section class="card" id="catalog-card">
-<h2>Instrument directory</h2><p class="sub">Search the captured catalog. Select exact provider/ticker pairs to generate a launch command. Changes apply on the next launch.</p>
+<h2>Manage instruments</h2><p class="sub">Choose a Kalshi research preset or add exact ticker pairs. Save your workspace and restart with the command below; active feeds are not interrupted while editing.</p><div class="filters"><button id="use-active">Use active tickers</button><select id="preset-picker" aria-label="Research preset"><option value="">Choose preset…</option><option value="btc">BTC</option><option value="btc-depth">BTC spot + perpetual</option><option value="crypto15">Kalshi crypto 15m research</option><option value="gold">Gold + context</option><option value="markets15">Gold + FX</option><option value="realtime">General markets</option></select><button id="use-preset">Load preset</button><button id="clear-pairs">Clear</button><strong id="pair-count"></strong></div>
 <div class="filters"><input id="catalog-query" placeholder="BTC, gold, provider..." aria-label="Search instruments"><button id="catalog-search">Search</button><input id="manual-pair" placeholder="PROVIDER:TICKER" aria-label="Exact ticker"><button id="catalog-add">Add exact pair</button></div>
 <div class="scroll"><table id="catalog-results"></table></div>
-<div id="saved-pairs" class="flow-status"></div><textarea id="launch-command" readonly rows="3" style="width:100%" aria-label="PowerShell launch command"></textarea><button id="copy-command">Copy launch command</button>
+<div id="saved-pairs" class="flow-status"></div><textarea id="launch-command" readonly rows="3" style="width:100%" aria-label="PowerShell launch command"></textarea><button id="save-workspace">Save workspace</button> <button id="copy-command">Copy restart command</button> <span id="workspace-status" role="status"></span>
 </section>
 <section class="card hidden" id="table-card">
   <h2>Table view</h2>
@@ -1330,7 +1330,7 @@ async function loadFlowVisuals(){
   }catch{if(SELECTED===key)host.textContent="Detailed flow unavailable; see stream status.";}
   finally{detailBusy=false;}
 }
-let savedPairs=[];
+let savedPairs=[],workspace=null;
 try{const stored=JSON.parse(localStorage.getItem("tp-watchlist")||"[]");if(Array.isArray(stored))savedPairs=stored.filter(x=>typeof x==="string").slice(0,12);}catch{}
 const validPair=p=>/^[A-Za-z0-9_]+:[A-Za-z0-9_./!+\-]+$/.test(p)&&p.length<=120;
 function showSavedPairs(){
@@ -1339,9 +1339,10 @@ function showSavedPairs(){
     const b=document.createElement("button");b.textContent=pair+" ×";b.onclick=()=>{savedPairs=savedPairs.filter(x=>x!==pair);showSavedPairs();};host.append(b);
   }
   try{localStorage.setItem("tp-watchlist",JSON.stringify(savedPairs));}catch{}
-  document.getElementById("launch-command").value=savedPairs.length?"py -m tpscraper dashboard --remember --orderflow --authorized --auto-renew "+savedPairs.map(p=>'--ticker "'+p+'"').join(" "):"";
+  document.getElementById("pair-count").textContent=savedPairs.length+" / 12 selected";
+  document.getElementById("launch-command").value="py -m tpscraper dashboard --workspace --watchlist btc --remember --orderflow --authorized --browser-renew";
 }
-function addPair(p){if(validPair(p)&&!savedPairs.includes(p)&&savedPairs.length<12){savedPairs.push(p);showSavedPairs();}}
+function addPair(p){const status=document.getElementById("workspace-status");if(!validPair(p)){status.textContent="Use exact PROVIDER:TICKER.";return;}if(savedPairs.includes(p)){status.textContent="Already selected.";return;}if(savedPairs.length>=12){status.textContent="12 instrument limit reached.";return;}savedPairs.push(p);showSavedPairs();status.textContent="Unsaved changes";}
 document.getElementById("catalog-add").onclick=()=>addPair(document.getElementById("manual-pair").value.trim());
 document.getElementById("catalog-search").onclick=async()=>{
   const table=document.getElementById("catalog-results");
@@ -1352,7 +1353,30 @@ document.getElementById("catalog-search").onclick=async()=>{
   }catch{table.textContent="Catalog unavailable";}
 };
 document.getElementById("copy-command").onclick=async()=>{const el=document.getElementById("launch-command");el.select();try{await navigator.clipboard.writeText(el.value);}catch{document.execCommand("copy");}};
+async function loadWorkspace(){
+  try {
+    workspace=await fetch("/api/workspace",{cache:"no-store"}).then(r=>{if(!r.ok)throw Error();return r.json();});
+    savedPairs=(workspace.saved||workspace.active).filter(validPair).slice(0,12);
+    showSavedPairs();
+  }catch{document.getElementById("workspace-status").textContent="Workspace API unavailable.";}
+}
+document.getElementById("use-active").onclick=()=>{if(workspace){savedPairs=[...workspace.active];showSavedPairs();}};
+document.getElementById("use-preset").onclick=()=>{const p=workspace?.presets?.[document.getElementById("preset-picker").value];if(p){savedPairs=[...p];showSavedPairs();}};
+document.getElementById("clear-pairs").onclick=()=>{savedPairs=[];showSavedPairs();};
+document.getElementById("save-workspace").onclick=async()=>{
+  const status=document.getElementById("workspace-status");
+  if(!savedPairs.length){status.textContent="Choose at least one ticker.";return;}
+  try{
+    const r=await fetch("/api/workspace",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({pairs:savedPairs})});
+    if(!r.ok)throw Error();
+    status.textContent="Saved. Restart using the command below to apply.";
+  }catch{status.textContent="Workspace save failed.";}
+};
+let catalogTimer;
+document.getElementById("catalog-query").addEventListener("input",()=>{clearTimeout(catalogTimer);catalogTimer=setTimeout(()=>document.getElementById("catalog-search").click(),300);});
+document.getElementById("manual-pair").addEventListener("keydown",e=>{if(e.key==="Enter")document.getElementById("catalog-add").click();});
 showSavedPairs();
+loadWorkspace();
 setInterval(loadFlowVisuals,1000);
 function connect() {
   const source = new EventSource("/api/stream");
