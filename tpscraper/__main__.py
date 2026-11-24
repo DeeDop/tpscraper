@@ -86,6 +86,13 @@ def probe(service, seconds, auth=None, symbol="XAU/USD", provider="FXPPST", clie
     return result
 
 def main():
+    import sys
+    if len(sys.argv)>1 and sys.argv[1] in ("dashboard","serve"):
+        from .dashboard import main as dashboard_main
+        args=sys.argv[2:]
+        if sys.argv[1]=="serve" and "--no-browser" not in args:
+            args=args+["--no-browser"]
+        return dashboard_main(args)
     parser=argparse.ArgumentParser()
     sub=parser.add_subparsers(dest="command",required=True)
     p=sub.add_parser("probe")
