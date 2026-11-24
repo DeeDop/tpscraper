@@ -68,7 +68,9 @@ def main():
     parser.add_argument("--provider", default="FXPPST")
     parser.add_argument("--interval", type=float, default=15, help="Seconds between requests (minimum 15)")
     parser.add_argument("--count", type=int, default=0, help="Number of observations; zero runs until stopped")
-    parser.add_argument("--session", action="store_true", help="Use existing experimental session renewal, if permitted")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--session", action="store_true", help="Use existing experimental session renewal, if permitted")
+    mode.add_argument("--browser", action="store_true", help="Opt-in isolated Chrome authorization, if permitted")
     args = parser.parse_args()
     if not 15 <= args.interval <= 3600 or not 0 <= args.count <= 100000:
         parser.error("interval must be 15–3600 seconds and count must be nonnegative")
@@ -76,7 +78,11 @@ def main():
     try:
         print("TPSCRAPER | QUOTE MONITOR", flush=True)
         print("Snapshot polling; not push streaming. Prices are unverified.", flush=True)
-        auth = Auth.prompt(session=args.session)
+        if args.browser:
+            from .browser_auth import BrowserAuth
+            auth = BrowserAuth()
+        else:
+            auth = Auth.prompt(session=args.session)
         with httpx.Client(http2=True, timeout=10, follow_redirects=False, trust_env=False) as client:
             monitor(auth, args.symbol, args.provider, args.interval, args.count, client, emit=lambda line: print(line, flush=True))
     except AuthError as exc:
