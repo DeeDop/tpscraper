@@ -1,13 +1,13 @@
 import unittest
 from tpscraper.quote_schema import candidate_details, candidate_price
 
-# Public quote fields only, extracted from captured XAU/SGD response.
-BODY=bytes.fromhex("12830212fe010a7c0a0808d1ce9d0210e8071a0e08d587ffffffffffffff0110e807220d08e0ffffffffffffffff011064320808eff89e0210e8073a0808ede2a10210e807420808f4989d0210e8074a0a0a0808fcc69e0210e807520608904e10904e5a0808d1ce9d0210e807620908f0bad8f30710904e6a0a08adddf6ee841d10e807127a0a0808d1ce9d0210e8071a0e08d587ffffffffffffff0110e807220d08e0ffffffffffffffff011064320808eff89e0210e8073a0808ede2a10210e807420808f4989d0210e8074a0a0a0808fcc69e0210e807520608904e10904e5a0808d1ce9d0210e807620608de8b6210016a0b08e6b6a890f3d90110e8071a0208012001")
+# Gold market-data response only; no headers or credentials.
+BODY=bytes.fromhex("12e60112e1010a6e0a06089e8c1610641a0d08fdf3ffffffffffffff011064220d08d6ffffffffffffffff0110643206089e9c1610643a0608e3b91610644206088b871610644a080a0608a198161064520608904e10904e5a06089e8c161064620908f0f1f9d10810904e6a0908b8ecc5b3ba021064126b0a06089e8c1610641a0d08fdf3ffffffffffffff011064220d08d6ffffffffffffffff0110643206089e9c1610643a0608e3b91610644206088b871610644a080a0608a198161064520608904e10904e5a06089e8c16106462060894bd5910016a0908a4ef9e9bb30f10641a0208012001")
 
 class DetailsTests(unittest.TestCase):
     def test_captured_fields(self):
-        self.assertEqual(candidate_price(BODY),"4679.505")
-        self.assertEqual(candidate_details(BODY),dict(open="4701.295",high="4747.629",low="4672.628",prev_close="4694.908",change="-15.403",change_pct="-0.32"))
+        self.assertEqual(candidate_price(BODY),"3620.14")
+        self.assertEqual(candidate_details(BODY),dict(open="3640.62",high="3678.43",low="3613.55",prev_close="3635.53",change="-15.39",change_pct="-0.42",candidate_volume="231935",candidate_turnover="843968323.12"))
 
     def test_incomplete(self):
         self.assertEqual(candidate_details(b""),{})
