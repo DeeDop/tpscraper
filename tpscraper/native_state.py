@@ -32,9 +32,9 @@ class NativeDashboardState:
 
     def stream_event(self,label,event,detail=None):
         with self.diagnostic_lock:
-            r=self.diagnostics.setdefault(label,dict(attempts=0,messages=0,errors=0,retries=0,renewals=0))
-            name={"attempt":"attempts","message":"messages","error":"errors","retry":"retries","renewal":"renewals"}[event]
-            r[name]+=1
+            r=self.diagnostics.setdefault(label,dict(attempts=0,messages=0,errors=0,retries=0,renewals=0,renewal_successes=0))
+            name={"attempt":"attempts","message":"messages","error":"errors","retry":"retries","renewal":"renewals","renewal_success":"renewal_successes"}[event]
+            r[name]=r.get(name,0)+1
             r["last_event"]=event
             r["last_event_epoch"]=time.time()
             if event=="message":
