@@ -260,10 +260,12 @@ body { padding: clamp(9px,1.5vw,24px); }
   <span class="spacer"></span>
   <button id="reset-zoom" class="hidden">Reset zoom</button>
   <button id="toggle-table" aria-pressed="false">Table view</button>
+  <button id="manage-tickers" onclick="document.getElementById('catalog-card').scrollIntoView({behavior:'smooth'})">+ Manage tickers</button>
   <button id="toggle-theme">Theme</button>
 </div>
 
 <div class="grid-kpi" id="tiles"></div>
+<section class="card" id="reliability-card"><h2>Live reliability scorecard</h2><p class="sub">Current observations, not certification of sustained operation. Offline tests and network recovery require separate validation.</p><div class="flow-grid" id="reliability-metrics"></div></section>
 
 <section class="card">
   <h2>Extraction checks</h2>
@@ -1254,6 +1256,7 @@ function renderLive() {
   renderTiles(LIVE);
   renderChecks(LIVE);
   renderFlow();
+  renderReliability();
   const native = LIVE.mode === "native_push";
   document.getElementById("conn-dot").style.background = css(LIVE.connected ? (native ? "--good" : "--warning") : "--critical");
   document.getElementById("conn-text").textContent = LIVE.connected ? (native ? "native streams" : "receiving snapshots") : (LIVE.reason || "no upstream data");
@@ -1279,6 +1282,30 @@ function renderAll() {
 }
 
 
+function renderReliability(){
+  const q=Object.values(LIVE.quotes||{});
+  const flows=q.filter(x=>x.orderflow).map(x=>x.orderflow);
+  const count=k=>flows.filter(f=>f.streams?.[k]?.status==="live").length;
+  const d=Object.values(FULL?.diagnostics||{});
+  const auth=FULL?.diagnostics?.authorization;
+  const cells=[
+    ["Native connection",LIVE.connected?"Receiving":"Not receiving",LIVE.connected],
+    ["History ready",(LIVE.history_ready??0)+" / "+q.length,LIVE.history_ready===q.length],
+    ["Timestamped price",q.filter(x=>x.live_price_usable).length+" / "+q.length,q.length>0&&q.every(x=>x.live_price_usable)],
+    ["Synchronized depth",flows.filter(f=>f.book?.fresh).length+" / "+flows.length,flows.length>0&&flows.every(f=>f.book?.fresh)],
+    ["Trades",count("trades")+" / "+flows.length,flows.length>0&&count("trades")===flows.length],
+    ["Footprint",count("footprint")+" / "+flows.length,flows.length>0&&count("footprint")===flows.length],
+    ["Heatmap",count("heatmap")+" / "+flows.length,flows.length>0&&count("heatmap")===flows.length],
+    ["TPO",count("tpo")+" / "+flows.length,flows.length>0&&count("tpo")===flows.length],
+    ["Detected depth gaps",flows.reduce((n,f)=>n+(f.book_gaps||0),0),flows.length>0&&flows.every(f=>!f.book_gaps)],
+    ["Stream errors",d.reduce((n,x)=>n+(x.errors||0),0),d.length>0&&d.every(x=>!x.errors)],
+    ["Confirmed token rotations",auth?.renewal_successes||0,(auth?.renewal_successes||0)>=2],
+    ["Session uptime",fmt(LIVE.uptime_seconds/60,1)+" min",null],
+    ["Network recovery","See soak log / interruption test",null],
+    ["Resource stability","Run Windows soak monitor",null]
+  ];
+  document.getElementById("reliability-metrics").innerHTML=cells.map(([label,value,ok])=>'<div class="flow-metric"><small>'+escapeHtml(label)+'</small><strong class="'+(ok===true?'up':ok===false?'flat':'')+'">'+escapeHtml(String(value))+'</strong></div>').join("");
+}
 function renderResearch(){
   const card=document.getElementById("research-card");
   card.classList.toggle("hidden",!FULL?.lead_lag);
