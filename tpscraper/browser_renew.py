@@ -40,7 +40,7 @@ class RenewalBridge:
             def permitted(self):
                 expected="Bearer "+bridge.code
                 actual=self.headers.get("Authorization","")
-                return (self.headers.get("Host")==f"127.0.0.1:{port}"
+                return (self.headers.get("Host")==f"127.0.0.1:{bridge.server.server_port}"
                         and hmac.compare_digest(actual.encode("utf-8"),expected.encode("utf-8")))
 
             def do_GET(self):
