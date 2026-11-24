@@ -6,7 +6,7 @@ from pathlib import Path
 import httpx
 from .protocol import Decoder, frame
 from .auth import Auth, AuthError
-from .quote_schema import quote_request, candidate_price
+from .quote_schema import quote_request, candidate_price, candidate_details
 
 BASE = "https://backend.takeprofit.com/"
 SERVICES = {
@@ -21,6 +21,7 @@ def probe(service, seconds, auth=None, symbol="XAU/USD", provider="FXPPST", clie
     start = time.monotonic()
     decoder = Decoder()
     candidates=[]
+    details=[]
     if service=="quote":
         result.update(symbol=symbol, provider=provider)
     try:
@@ -60,6 +61,7 @@ def probe(service, seconds, auth=None, symbol="XAU/USD", provider="FXPPST", clie
                                 if flags==0 and service=="quote":
                                     try:
                                         candidates.append(candidate_price(body))
+                                        details.append(candidate_details(body))
                                     except ValueError:
                                         result["schema_mismatch"]=True
                         # A completed gRPC trailer takes precedence over the time limit.
@@ -76,6 +78,8 @@ def probe(service, seconds, auth=None, symbol="XAU/USD", provider="FXPPST", clie
                     elif result["grpc_status"]==0 and candidates:
                         result["outcome"]="candidate_price_unverified"
                         result["candidate_prices"]=candidates[:20]
+                        if len(details)==1 and details[0]:
+                            result["candidate_details"]=details[0]
     except AuthError as exc:
         result.update(outcome="authorization_required", detail=str(exc))
     except (httpx.HTTPError,ValueError) as exc:
