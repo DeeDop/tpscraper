@@ -2,7 +2,7 @@
 import math
 import threading
 import time
-from statistics import correlation
+from statistics import correlation, stdev
 from .dashboard_state import utc, returns
 
 
@@ -43,7 +43,11 @@ class NativeDashboardState:
                 return
             for name in ("main_session","daily_session"):
                 if name in item:
-                    r["sessions"].setdefault(name,{}).update(item[name])
+                    target=r["sessions"].setdefault(name,{})
+                    incoming=item[name]
+                    if "last" in incoming and "exchange_timestamp" not in incoming:
+                        target.pop("exchange_timestamp",None)
+                    target.update(incoming)
             # Only a price in the current message refreshes receipt freshness.
             name="main_session" if "last" in r["sessions"].get("main_session",{}) else "daily_session"
             update=item.get(name,{})
@@ -123,6 +127,8 @@ class NativeDashboardState:
                 low,high=d.get("low"),d.get("high")
                 has_range=last is not None and low is not None and high is not None and low<=last<=high
                 bar_note=r["bar_state"].get(60,"connecting")
+                rr=list(returns(self.series(bars,60,now)).values())
+                vol=stdev(rr)*math.sqrt(365*24*60)*100 if len(rr)>=20 else None
                 checks=[
                     dict(id="feed",status=severity,detail=r["quote_state"]),
                     dict(id="fresh",status="good" if eligible else "warning" if fresh else "unknown",
@@ -139,7 +145,7 @@ class NativeDashboardState:
                     bid=None,ask=None,open=d.get("open"),high=high,low=low,prev_close=d.get("prev_close"),
                     volume=d.get("volume"),candidate_volume=None,turnover=d.get("value"),
                     range_position=(last-low)/(high-low) if has_range and high>low else None,
-                    realized_vol_pct=None,bar_count=len(bars),bar_updates=r["bar_updates"],history_ready=60 in r["ready"])
+                    realized_vol_pct=vol,bar_count=len(bars),bar_updates=r["bar_updates"],history_ready=60 in r["ready"])
                 if with_series:
                     item.update(bars=self.series(bars,60,now),micro_bars=self.series(r["micro_bars"],30,now))
                 instruments.append(item)
@@ -164,7 +170,7 @@ class NativeDashboardState:
                     common=sorted(a.keys() & b.keys())
                     cr.append(len(common))
                     try:
-                        mr.append(correlation([a[t] for t in common],[b[t] for t in common]) if len(common)>=10 else None)
+                        mr.append(correlation([a[t] for t in common],[b[t] for t in common]) if len(common)>=30 else None)
                     except (ValueError,ZeroDivisionError):
                         mr.append(None)
                 matrix.append(mr); counts.append(cr)
