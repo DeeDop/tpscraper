@@ -33,11 +33,13 @@ class OrderBook:
         for dest,key,side in ((self.bids,"bid_levels","bid"),(self.asks,"ask_levels","ask")):
             for level in row[key]:
                 p,q=level["price"],level["size"]
-                # Omitted quantities have not been validated against live deltas.
-                # Never silently delete a price level based on an unknown size.
+                # The captured OrderBook worker maps missing Decimal to zero,
+                # and its storage explicitly deletes zero-size delta levels.
                 if q is None:
+                    q=0.0
+                if not math.isfinite(p) or p<=0 or not math.isfinite(q) or q<0:
                     self.reset()
-                    raise BookGap("unknown level quantity")
+                    raise BookGap("invalid level")
                 if row["kind"]=="update":
                     delta=q-dest.get(p,0.0)
                     changes[side+("_added" if delta>=0 else "_removed")]+=abs(delta)
@@ -196,6 +198,8 @@ class FlowState:
                             del self.heat[key]
                 elif kind=="tpo":
                     if r["kind"]=="profile":
+                        if r.get("start") is None or (self.tpo.get("start") is not None and r["start"]<self.tpo["start"]):
+                            continue
                         self.tpo=dict(r)
                         self.tpo["rows_verified"]=bool(r.get("levels"))
                         accepted=True
@@ -204,11 +208,33 @@ class FlowState:
                     elif self.tpo and r.get("start")==self.tpo.get("start"):
                         self.tpo.update({k:v for k,v in r.items() if k not in ("kind","row_diffs","block_appends")})
                         accepted=True
-                        # Row diff accumulation is not live-verified. Do not expose speculative levels.
-                        self.tpo["rows_verified"]=False
-                        self.tpo["levels"]=[]
-                        self.tpo["block_infos"]=[]
-                        continue
+                        # Matches the captured client storage: union newly visited
+                        # block indexes and splice block metadata at its explicit index.
+                        # Do not accumulate volume fields the client doesn't apply.
+                        levels={x["price"]:dict(x) for x in self.tpo.get("levels",[]) if x["price"] is not None}
+                        for diff in r.get("row_diffs",[]):
+                            p=diff["price"]
+                            if p is None:
+                                continue
+                            row=levels.setdefault(p,dict(price=p,block_indexes=[]))
+                            row["block_indexes"]=sorted(set(row["block_indexes"])|set(diff["block_indexes"]))
+                            # Snapshot volume may now be outdated.
+                            row["buy_volume"]=row["sell_volume"]=None
+                        self.tpo["levels"]=sorted(levels.values(),key=lambda x:x["price"])
+                        infos=list(self.tpo.get("block_infos",[]))
+                        for a in r.get("block_appends",[]):
+                            index=a["index"]
+                            end=index+len(a["offsets"])
+                            if index>len(infos) or end>10000:
+                                raise ValueError("TPO block metadata gap")
+                            if len(infos)<end:
+                                infos.extend([None]*(end-len(infos)))
+                            infos[index:end]=a["offsets"]
+                        self.tpo["block_infos"]=infos
+                        self.tpo["price_rows"]=len(levels)
+                        self.tpo["blocks"]=len(infos)
+                        self.tpo["rows_verified"]=bool(levels)
+                        self.tpo["volume_updates_verified"]=False
             if accepted:
                 self.states[kind]="receiving"
                 self.received[kind]=now
