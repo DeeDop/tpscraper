@@ -56,8 +56,9 @@ class DedicatedChromeAuth(LocalChromeAuth):
 
     def headers(self):
         self._open()
-        if self._login and not self._restore_attempted:
-            self._restore_attempted=True
+        # Always obtain a token from this specific signed-in session at startup.
+        # Do not reuse a cached token from a different browser account.
+        self._restore_attempted=True
         return super().headers()
 
     def refresh(self):
@@ -80,7 +81,10 @@ class DedicatedChromeAuth(LocalChromeAuth):
             raise AuthError("Dedicated Chrome authorization request failed. Check connection and signed-in session.") from None
         finally:
             if response is not None:
-                response.dispose()
+                try:
+                    response.dispose()
+                except Exception:
+                    pass
         self._access=value
         self.renewals+=1
         if self.store is not None:
@@ -90,6 +94,14 @@ class DedicatedChromeAuth(LocalChromeAuth):
                 self.emit("Encrypted storage unavailable; using memory only.")
         self.emit("Dedicated Chrome authorization accepted.")
         return value
+
+    def prepare_renewal(self):
+        """Request new authorization on the collector thread before closing streams."""
+        from .auth import expires_at
+        old_expiry=expires_at(self._access) if self._access else None
+        value=self.refresh()
+        if old_expiry is not None and expires_at(value)<=old_expiry:
+            raise AuthError("Provider did not extend authorization. Collection stopped; sign in again if permitted.")
 
     def close(self):
         super().close()
