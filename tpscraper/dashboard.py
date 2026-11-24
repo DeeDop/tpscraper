@@ -1,6 +1,7 @@
 """Loopback dashboard and predictor API with native TakeProfit streams by default."""
 import argparse
 import json
+import os
 import sqlite3
 import threading
 import time
@@ -86,7 +87,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             else:
                 payload={"orderflow":self.state.flow_snapshot(True)} if hasattr(self.state,"flow_snapshot") else {"orderflow":{}}
         elif route=="/api/diagnostics":
-            payload={"streams":self.state.diagnostic_snapshot()} if hasattr(self.state,"diagnostic_snapshot") else {"streams":{}}
+            payload={"streams":self.state.diagnostic_snapshot() if hasattr(self.state,"diagnostic_snapshot") else {},
+                     "process_id":os.getpid(),"python_threads":threading.active_count()}
         elif route=="/api/catalog":
             payload=catalog_payload(self.path)
         elif route=="/api/quotes":
@@ -99,7 +101,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                          history_ready=data.get("history_ready",0),
                          timestamped_live_count=sum(q.get("live_price_usable",False) for q in data["quotes"].values()),
                          fresh_book_count=sum(bool(q.get("orderflow",{}).get("book",{}).get("fresh")) for q in data["quotes"].values()),
-                         uptime_seconds=data.get("uptime_seconds"))
+                         uptime_seconds=data.get("uptime_seconds"),process_id=os.getpid(),python_threads=threading.active_count())
         else:
             self.send_error(404)
             return
@@ -168,7 +170,10 @@ def main(argv=None):
     p.add_argument("--no-browser",action="store_true")
     p.add_argument("--local-chrome",action="store_true",help="Regular Chrome authorization (default)")
     p.add_argument("--remember",action="store_true")
-    p.add_argument("--auto-renew",action="store_true",help="Optional paired Chrome renewal; only with provider permission")
+    renewal=p.add_mutually_exclusive_group()
+    renewal.add_argument("--auto-renew",action="store_true",help="Legacy paired Chrome extension renewal")
+    renewal.add_argument("--browser-renew",action="store_true",help="Consent-based dedicated Chrome renewal without extension")
+    p.add_argument("--browser-login",action="store_true",help="Sign in again in dedicated Chrome; requires --browser-renew")
     p.add_argument("--chrome-profile")
     p.add_argument("--ticker",action="append",default=[],help="Override preset with repeatable PROVIDER:TICKER values")
     args=p.parse_args(argv)
@@ -178,8 +183,12 @@ def main(argv=None):
         p.error("--flow-budget must be 1-60")
     if args.refresh_capabilities and not args.orderflow:
         p.error("--refresh-capabilities requires --orderflow")
-    if args.auto_renew and (args.snapshot or not args.authorized):
-        p.error("--auto-renew requires native mode and --authorized")
+    if (args.auto_renew or args.browser_renew) and (args.snapshot or not args.authorized):
+        p.error("Browser renewal requires native mode and --authorized")
+    if args.browser_login and not args.browser_renew:
+        p.error("--browser-login requires --browser-renew")
+    if args.browser_renew and args.chrome_profile:
+        p.error("--browser-renew uses its own dedicated profile, not --chrome-profile")
     if args.orderflow and (args.snapshot or not args.authorized):
         p.error("--orderflow requires native mode and --authorized")
     if args.record_flow and not args.orderflow:
@@ -246,7 +255,10 @@ def main(argv=None):
     thread=None
     try:
         # Authorize on main thread, before starting server.
-        if args.auto_renew:
+        if args.browser_renew:
+            from .dedicated_chrome import DedicatedChromeAuth
+            auth=DedicatedChromeAuth(store=store,login=args.browser_login)
+        elif args.auto_renew:
             from .browser_renew import BrowserRenewAuth
             auth=BrowserRenewAuth(store=store)
         else:
