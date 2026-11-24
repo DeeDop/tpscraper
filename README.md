@@ -56,3 +56,7 @@ Run `py -m tpscraper.console --local-chrome` on Windows. Approve opening your no
 ### Optional encrypted storage and Chrome profile selection
 
 `py -m tpscraper.console --local-chrome --remember` stores only the access token, encrypted with current-user Windows DPAPI, at `%LOCALAPPDATA%\\tpscraper\\auth\\access.dpapi`. It reuses the token until near expiration, then prompts for fresh authorization in normal installed Chrome. Add `--chrome-profile "Profile 1"` (or `Default`) if Chrome opens a different profile. The profile directory name is visible on Chrome's chrome://version page; no profile files are read by tpscraper. No extra dependencies are needed. `py -m tpscraper.credential_store status` shows expiration without printing the token, and `py -m tpscraper.credential_store clear` deletes the local encrypted file. This does not renew the browser session unattended or revoke server-side credentials.
+
+## Captured instrument catalog
+
+See [instrument documentation](docs/INSTRUMENTS.md), [562 captured provider/symbol pairs](docs/takeprofit_tickers.csv), and [provider codes](docs/takeprofit_exchanges.csv). Rebuild offline with `py -m tpscraper.har_catalog path-to-local.har --output docs`. This catalog reflects captured screener results, not verified live quote entitlements.
