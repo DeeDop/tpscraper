@@ -92,3 +92,15 @@ To establish actual TakeProfit historical backfill, use Chrome DevTools Network,
 The fourth HAR contains 11 successful ExtrapolationApi/ListBars POST responses, each with 500 timestamp-only records. These are future chart-axis extrapolation schedules (30m, 45m, 1h, 1d), **not historical OHLCV**. Do not use them as history. CandleStream is the next source to inspect for backfill and updates. Active stream bodies are not included in that HAR. The optional `tools/capture_candles.js` DevTools snippet captures a bounded sample of only those two market-data endpoints locally, without request headers or credentials. Run on the chart workspace, change timeframes without reloading, then call `tpCandleCapture.status()` and `tpCandleCapture.save()` in the Console; `tpCandleCapture.stop()` restores the original fetch function. If no entries are captured, the chart uses a different context or transport. Review the JSON before sharing.
 
 Quote fields 12 and 13 of the first quote section are candidate cumulative volume and turnover. Across two captured Gold snapshots volume changed from 231935 to 232031 and turnover from 843968323.12 to 844315868.68. Their delta ratio is 3620.26625, near the contemporaneous quote of 3620.41. This supports but does not prove the field interpretation; units, accumulation interval and resets are unknown. They are shown separately from per-bar volume and are not used for VWAP.
+
+### Native market-data protocol (worker schemas inspected Nov 24)
+
+The client worker definitions establish the actual historical endpoint `CandleHistoryApi/ListCandles`, server-streaming `CandleStreamApi/CandleStream` (initial history count followed by updates), and tagged multi-instrument `QuoteApi/QuoteStream`. The Python implementation in native_schema.py is independent; original worker bundles are not stored here. The definitions establish field names, not feed entitlements, latency or volume units. Run these bounded tests only where authorized:
+
+```powershell
+py -m tpscraper.native_probe history --remember --count 360
+py -m tpscraper.native_probe candles --remember --count 360 --seconds 15
+py -m tpscraper.native_probe quotes --remember --seconds 15
+````
+
+Each command reports decoded counts, timestamps and market data only. No auth headers or credentials are printed. History is requested as ordinary uncompressed messages; compressed response data is rejected until supported. The quote test requests two tagged instruments in one stream and merges sparse fields. The dashboard continues to use its existing snapshot collector until native endpoint authorization and live message decoding are confirmed. Do not treat any of these independent prices as Kalshi settlement values.
