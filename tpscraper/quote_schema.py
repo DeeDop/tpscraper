@@ -75,3 +75,36 @@ def candidate_price(data):
     if not 0<divisor<=10**12:
         raise ValueError("Invalid price divisor")
     return str(Decimal(number)/Decimal(divisor))
+
+
+def candidate_details(data):
+    """Observed fixed-point fields; only emit internally consistent candidates.
+    No timestamp, bid/ask or volume schema is established.
+    """
+    def dec(path):
+        n=at(data,path+(1,),0)
+        d=at(data,path+(2,),0)
+        if n>=1<<63:
+            n-=1<<64
+        if not 0<d<=10**12:
+            raise ValueError("Invalid fixed point")
+        return Decimal(n)/Decimal(d)
+    prefix=(2,2,1)
+    try:
+        last=dec(prefix+(1,))
+        change=dec(prefix+(3,))
+        pct=dec(prefix+(4,))
+        op=dec(prefix+(6,))
+        hi=dec(prefix+(7,))
+        lo=dec(prefix+(8,))
+        prev=dec(prefix+(9,1))
+        if not (prev>0 and lo<=min(last,op)<=max(last,op)<=hi):
+            return {}
+        if abs(last-prev-change)>Decimal("0.000001"):
+            return {}
+        if abs((last-prev)/prev*100-pct)>Decimal("0.02"):
+            return {}
+        return {k:str(v) for k,v in dict(open=op,high=hi,low=lo,prev_close=prev,
+                                       change=change,change_pct=pct).items()}
+    except (ValueError,ArithmeticError):
+        return {}
