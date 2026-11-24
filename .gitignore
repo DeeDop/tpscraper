@@ -9,3 +9,5 @@ probe_result.json
 *.bin
 *.sqlite*
 secrets/
+
+*.dpapi
