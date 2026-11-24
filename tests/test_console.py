@@ -34,7 +34,7 @@ class ConsoleTests(unittest.TestCase):
         probe.side_effect=[result(),result("3622.49")]
         lines=[]
         sleeps=[]
-        self.assertEqual(monitor(None,"XAU/USD","FXPPST",count=2,emit=lines.append,sleep=sleeps.append),2)
+        self.assertEqual(monitor(None,"XAU/USD","FXPPST",count=2,emit=lines.append,sleep=sleeps.append,clock=lambda:100.0),2)
         self.assertEqual(sleeps,[15])
         self.assertIn("DOWN -0.02",lines[1])
 
