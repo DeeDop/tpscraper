@@ -1,6 +1,6 @@
 """Offline, credential-free diagnostics for captured historical market-data messages.
 
-Only ListBars POST request/response bodies are examined. No headers, cookies,
+Only ListBars and CandleStream market-data bodies are examined. No headers, cookies,
 URLs with queries, raw binary data, arbitrary text or identifiers are emitted.
 """
 import argparse
@@ -10,9 +10,35 @@ import struct
 from pathlib import Path
 from urllib.parse import urlsplit
 from .protocol import Decoder
-from .quote_schema import fields
+from .quote_schema import fields, read_varint
 
 ENDPOINT="/takeprofit.marketdata.external.candle.v1.ExtrapolationApi/ListBars"
+STREAM_ENDPOINT="/takeprofit.marketdata.external.candle.v1.CandleStreamApi/CandleStream"
+
+def packed_summary(data):
+    # Numeric interpretations of packed protobuf arrays, not identified fields.
+    # Avoid exporting strings, raw bytes or complete arbitrary payloads.
+    if len(data)<8 or len(data)>1024*1024:
+        return {}
+    import math
+    out={}
+    for size,fmt in ((4,"<f"),(8,"<d")):
+        if len(data)%size==0:
+            vals=[v[0] for v in struct.iter_unpack(fmt,data)]
+            if all(math.isfinite(v) for v in vals):
+                out[f"fixed{size*8}"]={"count":len(vals),"first":vals[:3],"last":vals[-1:]}
+    try:
+        pos=0; count=0; first=[]; last=None
+        while pos<len(data):
+            last,pos=read_varint(data,pos)
+            count+=1
+            if count<=3:
+                first.append(last)
+        if count>=4:
+            out["varint"]={"count":count,"first":first,"last":[last]}
+    except ValueError:
+        pass
+    return out
 
 def tree(body,allowed,depth=0):
     result={}
@@ -32,7 +58,7 @@ def tree(body,allowed,depth=0):
                     try:
                         items.append({"wire":wire,"length":len(value),"fields":tree(value,allowed,depth+1)})
                     except ValueError:
-                        items.append({"wire":wire,"length":len(value)})
+                        items.append({"wire":wire,"length":len(value),"packed_candidates":packed_summary(value)})
                 else:
                     items.append({"wire":wire,"length":len(value)})
             else:
@@ -63,14 +89,16 @@ def body_bytes(obj):
             pass
     return out
 
-def describe(obj,allowed):
+def describe(obj,allowed,allow_partial=False):
     for data in body_bytes(obj):
         if len(data)>16*1024*1024:
             continue
         try:
             decoder=Decoder()
             frames=list(decoder.feed(data))
-            decoder.finish()
+            partial=bool(decoder.buffer)
+            if not allow_partial:
+                decoder.finish()
             if not frames:
                 continue
             out=[]
@@ -84,29 +112,35 @@ def describe(obj,allowed):
                         if k.lower()==b"grpc-status" and v.strip().isdigit():
                             item["grpc_status"]=int(v.strip())
                 out.append(item)
-            return {"frame_count":len(frames),"frames":out}
+            return {"frame_count":len(frames),"partial":partial,"frames":out}
         except (ValueError,OverflowError,RecursionError):
             continue
     return {"available":False,"reason":"Missing or undecodable binary body"}
 
 def inspect(har,allowed):
     output=[]
+    streams=[]
     for entry in har.get("log",{}).get("entries",[]):
         req=entry.get("request",{})
         url=urlsplit(req.get("url",""))
-        if url.scheme!="https" or url.hostname!="backend.takeprofit.com" or url.path!=ENDPOINT or req.get("method")!="POST":
+        if url.scheme!="https" or url.hostname!="backend.takeprofit.com" or url.path not in (ENDPOINT,STREAM_ENDPOINT) or req.get("method")!="POST":
             continue
         res=entry.get("response",{})
         if res.get("status")!=200:
             continue
-        output.append({"request":describe(req.get("postData",{}),allowed),
-                       "response":describe(res.get("content",{}),allowed)})
-        if len(output)>=3:
+        stream=url.path==STREAM_ENDPOINT
+        target=streams if stream else output
+        if len(target)>=3:
+            continue
+        target.append({"request":describe(req.get("postData",{}),allowed),
+                       "response":describe(res.get("content",{}),allowed,allow_partial=stream)})
+        if len(output)>=3 and len(streams)>=3:
             break
-    return {"service":"ListBars","samples":output}
+    return {"service":"ListBars","samples":output,"candle_stream_samples":streams,
+            "note":"Numeric fields and packed array interpretations are candidates; volume units not established."}
 
 def main():
-    p=argparse.ArgumentParser(description="Extract credential-free ListBars structure from a local HAR")
+    p=argparse.ArgumentParser(description="Extract credential-free ListBars and CandleStream structure from a local HAR")
     p.add_argument("har",type=Path)
     p.add_argument("--symbol",default="XAU/USD")
     p.add_argument("--provider",default="FXPPST")
