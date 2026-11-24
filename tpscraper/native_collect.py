@@ -10,6 +10,8 @@ import httpx
 from .auth import expires_at
 from .native_schema import CANDLE_STREAM, QUOTE_STREAM, candle_request, candle_item, quote_stream_request, quote_item
 from .native_probe import messages
+from .extended_schema import plans, trade_rows, book_summary, footprint_rows, tpo_rows
+from .flow_state import BookGap
 
 
 def collect_native(state,auth,stop):
@@ -119,8 +121,32 @@ def collect_native(state,auth,stop):
                                candle_item,on_bar,report,f"{inst.symbol} {period}s")
                         if cycle.wait(0.20):
                             break
+                # Only subscribe to flow services confirmed by the user reports.
+                for key,flow in state.flows.items():
+                    provider,symbol=flow.symbol.split(":",1)
+                    decoders={"trades":trade_rows,"footprint":lambda raw:footprint_rows(raw,full=True),
+                              "orderbook":lambda raw:book_summary(raw,full=True),
+                              "heatmap":lambda raw:book_summary(raw,heat=True,full=True),"tpo":tpo_rows}
+                    supported=("trades","footprint","tpo") if provider=="FXPPST" else tuple(decoders)
+                    requests=plans(symbol,provider)
+                    for kind in supported:
+                        if cycle.is_set() or stop.is_set():
+                            break
+                        service,payload,_=requests[kind]
+                        def apply(rows,f=flow,k=kind):
+                            f.ingest(k,rows)
+                            return True
+                        def report(reason,f=flow,k=kind):
+                            f.status(k,reason)
+                        launch(service,payload,decoders[kind],apply,report,f"{flow.symbol} {kind}")
+                        if cycle.wait(0.35):
+                            break
                 renew=False
+                next_record=time.monotonic()
                 while not stop.is_set() and not cycle.is_set():
+                    if state.recorder is not None and time.monotonic()>=next_record:
+                        state.record_flow()
+                        next_record=time.monotonic()+1
                     if expiry is not None and time.time()>=expiry-45:
                         renew=True
                         break
@@ -134,6 +160,9 @@ def collect_native(state,auth,stop):
                 for t in workers:
                     t.join(timeout=1)
                 state.all_quotes("native streams paused")
+                for flow in state.flows.values():
+                    for kind in list(flow.states):
+                        flow.status(kind,"paused")
         if halt:
             state.stop(halt[0])
             print(halt[0]+". Resolve provider access before restarting.",flush=True)
