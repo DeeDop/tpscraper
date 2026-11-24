@@ -1,4 +1,5 @@
 import argparse
+from contextlib import nullcontext
 import json
 import time
 from pathlib import Path
@@ -14,7 +15,7 @@ SERVICES = {
     "history": "takeprofit.marketdata.external.candle.v1.ExtrapolationApi/ListBars",
 }
 
-def probe(service, seconds, auth=None, symbol="XAU/USD", provider="FXPPST"):
+def probe(service, seconds, auth=None, symbol="XAU/USD", provider="FXPPST", client=None):
     result = {"service": service, "messages": 0, "bytes": 0,
               "chunks": 0, "prices_verified": False, "grpc_status": None}
     start = time.monotonic()
@@ -27,8 +28,8 @@ def probe(service, seconds, auth=None, symbol="XAU/USD", provider="FXPPST"):
         if auth:
             headers.update(auth.headers())
         payload=quote_request(symbol,provider) if service=="quote" else b""
-        with httpx.Client(http2=True, timeout=min(seconds,10), follow_redirects=False, trust_env=False) as client:
-            with client.stream("POST",BASE+SERVICES[service],content=frame(payload),headers=headers) as response:
+        with (nullcontext(client) if client is not None else httpx.Client(http2=True, timeout=min(seconds,10), follow_redirects=False, trust_env=False)) as connection:
+            with connection.stream("POST",BASE+SERVICES[service],content=frame(payload),headers=headers) as response:
                 result.update(http_status=response.status_code,http_version=response.http_version)
                 if response.status_code != 200:
                     result["outcome"]="access_denied" if response.status_code in (401,403) else "rate_limited" if response.status_code==429 else "http_error"
