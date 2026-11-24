@@ -67,7 +67,7 @@ Clear removes the local saved token, not the server-side session.
 4. Start the dashboard or headless service with `--auto-renew --authorized`.
 5. Paste the terminal's local pairing code into the extension popup and select **Authorize and pair**.
 
-The extension requests fresh authorization through the normal first-party signed-in session only when the paired local process asks. No browser profile inspection, password extraction or network interception. The renewal bridge binds to 127.0.0.1:8790 and requires its random per-process pairing code. Pair once per running process; keep Chrome signed in. Disable from the extension popup. Server-side refusal stops renewal. Live unattended renewal is implemented but has not yet been verified in the actual Chrome session.
+The extension requests fresh authorization through the normal first-party signed-in session only when the paired local process asks. No browser profile inspection, password extraction or network interception. The renewal bridge binds to 127.0.0.1:8790 and requires its random per-process pairing code. Pair once per running process; keep Chrome signed in. Disable from the extension popup. Server-side refusal stops renewal. Initial paired Chrome token acquisition and ten-instrument Gold dashboard startup were confirmed by the user on November 24. Sustained unattended renewal across multiple expirations remains to be verified.
 
 ## Watchlists and market relationships
 
@@ -77,6 +77,9 @@ The extension requests fresh authorization through the normal first-party signed
 | gold | Gold and high-priority USD/rates context | 9 |
 | gold + orderflow | Gold context plus exchange-traded gold perpetual | 10 |
 | markets15 | Gold and six USD currency targets, plus context | 12 |
+| crypto15 | Nine requested Kalshi crypto research proxies | 9 |
+| btc | Bitcoin spot | 1 |
+| btc-depth | Bitcoin spot and perpetual | 2 |
 
 | Key | TakeProfit symbol | Research interpretation |
 |---|---|---|
@@ -95,6 +98,16 @@ The extension requests fresh authorization through the normal first-party signed
 | usdmxn | FXPPST:USD/MXN | markets15 only |
 
 The realtime preset includes copper, silver, gold, BTC, ETH, Nasdaq-100, S&P 500 and VIX candidates. Not all preset symbols or sessions have been live verified. Treasury prices generally move inversely to yields; they are not actual yield measurements. The perpetual and spot Gold prices have a basis: compare synchronized returns, not interchangeable absolute prices. Relationships are research hypotheses, not validated prediction signals.
+
+### Crypto research presets
+
+```powershell
+py -m tpscraper dashboard --watchlist btc --remember --orderflow --authorized --auto-renew
+py -m tpscraper dashboard --watchlist btc-depth --remember --orderflow --authorized --auto-renew
+py -m tpscraper dashboard --watchlist crypto15 --remember --orderflow --authorized --auto-renew
+```
+
+The `crypto15` preset preserves stable keys `btc`, `eth`, `sol`, `xrp`, `doge`, `bnb`, `hype`, `near`, `zec`. It uses Binance spot USDT pairs (including the catalog-listed HYPE/USDT candidate). These are research proxies for the requested market list, not an automatically synchronized list of active Kalshi contracts. Only BTC spot advanced services have been verified in the earlier individual crypto probes.
 
 ## Instrument discovery
 
@@ -120,7 +133,7 @@ Native mode starts one tagged multi-instrument quote stream and one native 1-min
 | Footprint | Provider buy/sell volumes, counts and price rows |
 | CVD | Sum of observed closed footprint deltas, not full-session CVD |
 | Liquidity heatmap | Provider depth buckets |
-| TPO | Initial profile and supported scalar updates |
+| TPO | Initial profile, scalar updates, block-index union and indexed block metadata updates matching the captured worker; no inferred volume accumulation |
 | Renko | Diagnostic only |
 
 ### True live versus receipt-only data
@@ -137,9 +150,9 @@ The local dashboard sends SSE ticks/quotes every approximately 250 ms and full h
 
 By default the advanced-stream budget is five per selected ticker, up to 60. Use `--flow-budget 24` or lower to reduce resource usage; pending services remain explicitly queued when the budget is full. A large watchlist can require many subscriptions; use only within provider limits. Stop if access or rate restrictions occur, not by increasing the budget.
 
-Capability observations are cached in `%LOCALAPPDATA%\tpscraper\marketdata\capabilities.json`. No data is cached for 15 minutes, unavailable for one hour, unsupported for one day, and observed for seven days. A timeout or empty stream is **no data observed**, not definitive unsupported status. `--refresh-capabilities` ignores cached negatives on initial discovery.
+Expired negative observations are eligible for retesting during operation (checked about once per minute, subject to the stream budget). Feature-specific permission refusal or schema failure disables that feature for the remainder of the process, including token rotations. Global authorization and rate-limit refusals stop collection. No access-denial retries. Capability observations are cached in `%LOCALAPPDATA%\tpscraper\marketdata\capabilities.json`. No data is cached for 15 minutes, unavailable for one hour, unsupported for one day, and observed for seven days. A timeout or empty stream is **no data observed**, not definitive unsupported status. `--refresh-capabilities` ignores cached negatives on initial discovery.
 
-The order book requires a snapshot and consecutive versions. A gap invalidates depth and triggers bounded reconnect attempts. Empty sides, missing quantities and crossed books are not reported as valid bid/ask. Unknown fields or service errors remain errors, not zero values. Trade deduplication uses provider IDs when present; unidentified events are counted separately.
+The order book requires a snapshot and consecutive versions. A gap invalidates depth and triggers reconnect attempts with capped exponential backoff and jitter. Empty sides, invalid quantities and crossed books are not reported as valid bid/ask. Inspection of the captured order-book worker confirms that omitted size is converted to zero and zero-size updates delete the affected level. This convention is regression-tested synthetically; sustained live order-book parity still needs verification. Unknown fields or service errors remain errors, not zero values. Trade deduplication uses provider IDs when present; unidentified events are counted separately.
 
 ## Dashboard
 
@@ -169,7 +182,8 @@ All routes are read-only, on **127.0.0.1:8789**. Do not expose this unauthentica
 | /api/snapshot | Full history, correlation and dashboard state |
 | /api/health | Connection, history ready, usable raw quotes, timestamped live count |
 | /api/stream | SSE events: full, tick, quotes |
-| /api/orderflow | Recent trade events, depth, footprint and heatmap profiles |
+| /api/orderflow | Recent trade events, depth, footprint and heatmap profiles; optional `?key=btc` limits details to one instrument |
+| /api/diagnostics | Per-stream attempts, accepted messages, retries, errors and renewal attempts |
 | /api/catalog | Search offline instrument directory |
 
 ### Python consumer (standard library)
@@ -226,13 +240,13 @@ Consumers must reject stale, invalid, restricted and missing features; never con
 py -m tpscraper serve --watchlist gold --remember --orderflow --authorized --auto-renew --record-flow "$env:USERPROFILE\Downloads\tpscraper_flow.sqlite3"
 ```
 
-Optional SQLite WAL journal of compact feature snapshots approximately once per second, seven-day retention, hourly pruning. No full raw depth snapshot replay, no authentication headers or tokens. Protect data according to provider terms.
+Optional SQLite WAL journal of compact feature and quote snapshots approximately once per second, plus completed provider bars. Seven-day retention with hourly pruning. A data gap is not filled with synthetic values. No full raw depth snapshot replay, no authentication headers or tokens. Protect data according to provider terms.
 
 ## CLI reference
 
 | Flag | Meaning |
 |---|---|
-| --watchlist realtime/gold/markets15 | Preset |
+| --watchlist realtime/gold/markets15/crypto15/btc/btc-depth | Preset |
 | --ticker PROVIDER:TICKER | Repeat to override preset, max 12 |
 | --history N | 360 default, max 1000 (500 with 30s) |
 | --native-30s | Optional extra stream per instrument |
@@ -287,7 +301,19 @@ These are sequential short observations, not concurrent synchronized market comp
 
 ### Current validation limits
 
-The separate live probes succeeded as described above. Continuous all-ticker discovery, sustained reconnections, automatic Chrome renewal, and long-run memory/performance are not yet verified on the user's machine. The new regression tests are committed but have not been executed against the complete updated checkout in this environment. The dashboard JavaScript syntax has been checked. Use the diagnostic results and freshness fields rather than assuming every service works. No verified prediction edge or latency guarantee.
+The separate live probes succeeded as described above. Initial Chrome pairing/token acquisition and Gold dashboard startup are confirmed. Sustained all-ticker discovery, reconnections, renewal through token expiry, and long-run memory/performance remain unverified on the user's machine. The new regression tests are committed but have not been executed against the complete updated checkout in this environment. The dashboard JavaScript syntax has been checked. Use the diagnostic results and freshness fields rather than assuming every service works. No verified prediction edge or latency guarantee.
+
+## Reliability and acceptance checks
+
+- Stream recovery uses capped exponential backoff (up to 120 seconds) with jitter. Successful sustained streams reset the failure backoff. Worker shutdown must complete before a new credential generation starts; an incomplete shutdown stops collection rather than allowing overlapping writers.
+- Duplicate or rejected trade messages do not renew the receipt-freshness clock. Timestamped prices remain separate from raw quotes. Best bid/ask are checked against the current synchronized book even within the cached depth-feature interval.
+- A reconnect clears the candle history-ready marker until the provider's initial history marker arrives again. Existing historical bars are retained; `missing_bar_intervals` measures gaps in the observed timeline, including legitimate closed-market periods. `bar_receipt_age_s` is receipt age, not proof of exchange latency. No market-hours calendar is assumed.
+- Completed-bar statistics are cached between historical revisions. Unknown or unavailable data is not interpreted as a trading signal.
+- The browser renewal path still restarts upstream streams after obtaining a new credential; uninterrupted handover is not claimed.
+
+Run `py -m compileall -q tpscraper tests` and `py -m unittest discover -s tests -v` after pulling. GitHub Actions runs these offline checks on Windows and Linux with Python 3.11 and 3.14, subject to repository Actions availability. The added regression suite checks stale/crossed depth, best-price cache correctness, explicit and omitted zero-size deletions, duplicate trade receipt, out-of-order events, reconnect history readiness, TPO block merges and disconnect invalidation. CI status must be checked before claiming tests pass.
+
+For live acceptance, begin with `--watchlist btc` before expanding to Gold or `crypto15`. Keep Chrome signed in and observe at least two token expirations. Inspect `/api/health` and `/api/diagnostics` for continued accepted messages, recovered streams, fresh books, timestamped prices, and successful reauthorization. Test a brief network interruption, then confirm history backfill and that stale data became ineligible during the interruption. Verify prices and spread against the identical TakeProfit instrument; a healthy receipt connection alone does not prove undelayed exchange data.
 
 ## Maintenance
 
@@ -300,3 +326,5 @@ Update this README whenever CLI flags, API fields, feed semantics, or validation
 - Added opt-in paired Chrome renewal.
 - Removed advanced symbol whitelist; added capability cache, subscription budget, responsive dynamic market panels.
 - Added independent timestamped live trade price, arrival-age metrics, explicit nullable spread/volume/VWAP, and ~250ms local SSE delivery.
+
+- Reliability hardening: independent feature refusal handling, expiring capability rechecks, jittered reconnects, bounded shutdown, accepted-record counters, current-book checks, timestamp freshness guards, candle readiness invalidation, cached bar statistics, verified worker merge conventions, and offline CI coverage.
