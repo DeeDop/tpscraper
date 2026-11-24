@@ -8,6 +8,7 @@ import webbrowser
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlsplit,parse_qs
 import httpx
 
 from .__main__ import probe
@@ -44,7 +45,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        route=self.path.split("?",1)[0]
+        url=urlsplit(self.path)
+        route=url.path
+        query=parse_qs(url.query)
         if route in ("/","/index.html"):
             self.send_body((Path(__file__).parent/"static"/"dashboard.html").read_bytes(),"text/html; charset=utf-8")
             return
@@ -53,6 +56,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type","text/event-stream")
             self.send_header("Cache-Control","no-cache")
             self.send_header("Connection","close")
+            self.connection.settimeout(10)
             self.end_headers()
             self.close_connection=True
             last_full=-float("inf")
@@ -75,7 +79,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if route=="/api/snapshot":
             payload=self.state.snapshot(True)
         elif route=="/api/orderflow":
-            payload={"orderflow":self.state.flow_snapshot(True)} if hasattr(self.state,"flow_snapshot") else {"orderflow":{}}
+            key=query.get("key",[None])[0]
+            if key is not None and hasattr(self.state,"flows"):
+                flow=self.state.flows.get(key)
+                payload={"orderflow":{key:flow.snapshot(details=True)} if flow is not None else {}}
+            else:
+                payload={"orderflow":self.state.flow_snapshot(True)} if hasattr(self.state,"flow_snapshot") else {"orderflow":{}}
+        elif route=="/api/diagnostics":
+            payload={"streams":self.state.diagnostic_snapshot()} if hasattr(self.state,"diagnostic_snapshot") else {"streams":{}}
         elif route=="/api/catalog":
             payload=catalog_payload(self.path)
         elif route=="/api/quotes":
@@ -86,7 +97,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                          instruments=len(data["quotes"]),usable_count=sum(q["usable_short_term"] for q in data["quotes"].values()),
                          receiving=sum(q["status"] in ("LIVE","UNVERIFIED") for q in data["quotes"].values()),
                          history_ready=data.get("history_ready",0),
-                         timestamped_live_count=sum(q.get("live_price_usable",False) for q in data["quotes"].values()))
+                         timestamped_live_count=sum(q.get("live_price_usable",False) for q in data["quotes"].values()),
+                         fresh_book_count=sum(bool(q.get("orderflow",{}).get("book",{}).get("fresh")) for q in data["quotes"].values()),
+                         uptime_seconds=data.get("uptime_seconds"))
         else:
             self.send_error(404)
             return
@@ -178,6 +191,7 @@ def main(argv=None):
         if len(args.ticker)>12:
             p.error("Maximum 12 instruments per process")
         items=[]
+        seen=set()
         for n,value in enumerate(args.ticker):
             if ":" not in value:
                 p.error("Use PROVIDER:TICKER with --ticker")
@@ -185,7 +199,11 @@ def main(argv=None):
                 symbol,provider=choose(value)
             except ValueError as exc:
                 p.error(str(exc))
-            items.append(Instrument(f"custom{n+1}",f"{provider}:{symbol}",symbol,"Custom",n%9+1,5))
+            pair=f"{provider}:{symbol}"
+            if pair in seen:
+                continue
+            seen.add(pair)
+            items.append(Instrument(f"custom{len(items)+1}",pair,symbol,"Custom",len(items)%9+1,5))
         instruments=tuple(items)
     store=None
     if args.remember:
