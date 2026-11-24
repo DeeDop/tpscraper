@@ -24,6 +24,7 @@ from .local_chrome import LocalChromeAuth, open_chrome
 from .credential_store import CredentialStore, StoreError
 from .auth import AuthError
 from .symbols import choose
+from .workspace import load_workspace,save_workspace,preset_pairs,instruments_for
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
@@ -44,6 +45,25 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control","no-store")
         self.end_headers()
         self.wfile.write(body)
+
+    def do_POST(self):
+        if self.path!="/api/workspace":
+            self.send_error(404)
+            return
+        expected=f"127.0.0.1:{self.server.server_port}"
+        if self.headers.get("Host")!=expected or self.headers.get("Origin")!="http://"+expected or self.headers.get("Content-Type")!="application/json":
+            self.send_error(403)
+            return
+        try:
+            length=int(self.headers.get("Content-Length","0"))
+            if not 0<length<=8192:
+                raise ValueError("Invalid workspace request size")
+            self.connection.settimeout(5)
+            pairs=save_workspace(json.loads(self.rfile.read(length))["pairs"])
+        except (ValueError,TypeError,KeyError,OSError):
+            self.send_error(400,"Invalid workspace or unable to save")
+            return
+        self.send_body(json.dumps({"saved":pairs,"restart_required":True}).encode(),"application/json")
 
     def do_GET(self):
         url=urlsplit(self.path)
@@ -89,6 +109,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
         elif route=="/api/diagnostics":
             payload={"streams":self.state.diagnostic_snapshot() if hasattr(self.state,"diagnostic_snapshot") else {},
                      "process_id":os.getpid(),"python_threads":threading.active_count()}
+        elif route=="/api/workspace":
+            try:
+                saved=load_workspace()
+            except (ValueError,TypeError,KeyError,OSError):
+                saved=None
+            payload={"saved":saved,"active":[i.symbol for i in self.state.instruments],"presets":preset_pairs(),"max_instruments":12}
         elif route=="/api/catalog":
             payload=catalog_payload(self.path)
         elif route=="/api/quotes":
@@ -176,6 +202,7 @@ def main(argv=None):
     p.add_argument("--browser-login",action="store_true",help="Sign in again in dedicated Chrome; requires --browser-renew")
     p.add_argument("--chrome-profile")
     p.add_argument("--ticker",action="append",default=[],help="Override preset with repeatable PROVIDER:TICKER values")
+    p.add_argument("--workspace",action="store_true",help="Use watchlist saved from the dashboard; fallback to selected preset if none exists")
     args=p.parse_args(argv)
     if not 1<=args.requests_per_second<=3 or not 1<=args.interval<=3600 or not 1<=args.history<=1440 or not 1024<=args.port<=65535:
         p.error("Invalid interval, port or history")
@@ -196,6 +223,15 @@ def main(argv=None):
     instruments=WATCHLISTS[args.watchlist]
     if args.orderflow and args.watchlist=="gold" and not args.ticker:
         instruments=instruments+(Instrument("gold_perp","CXBNF8:XAU/USDT.P","Gold perpetual (Binance)","Gold flow",5,2),)
+    if args.workspace and args.ticker:
+        p.error("Choose --workspace or --ticker, not both")
+    if args.workspace:
+        try:
+            saved=load_workspace()
+            if saved is not None:
+                instruments=instruments_for(saved)
+        except (ValueError,TypeError,KeyError,OSError):
+            p.error("Saved workspace is invalid or unreadable; repair it in the dashboard")
     if args.ticker:
         if len(args.ticker)>12:
             p.error("Maximum 12 instruments per process")
