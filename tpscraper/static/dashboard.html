@@ -1103,7 +1103,7 @@ function renderTables() {
   const payload = LIVE || FULL;
   if (!payload) return;
   const head = ["Instrument", "Symbol", "Last", "Change", "Change %", "Bid", "Ask", "Open", "High", "Low",
-    "Prev close", "Volume", "Range pos", "Ann. vol %", "Bars", "Ticks", "Feed"];
+    "Prev close", "Volume", "Candidate cumulative volume", "Range pos", "Ann. vol %", "Bars", "Ticks", "Feed"];
   const rows = payload.instruments.map((inst) => `<tr>
     <td><span class="check"><span class="key" style="background:${seriesColor(inst.slot)};margin-top:5px"></span>${escapeHtml(inst.name)}</span></td>
     <td>${escapeHtml(inst.symbol)}</td>
@@ -1117,6 +1117,7 @@ function renderTables() {
     <td class="num">${fmt(inst.low, inst.decimals)}</td>
     <td class="num">${fmt(inst.prev_close, inst.decimals)}</td>
     <td class="num">${compact(inst.volume)}</td>
+    <td class="num" title="Unverified cumulative quantity; units and interval unknown">${compact(inst.candidate_volume)}</td>
     <td class="num">${inst.range_position === null ? "—" : (inst.range_position * 100).toFixed(0) + "%"}</td>
     <td class="num">${inst.realized_vol_pct === null ? "—" : inst.realized_vol_pct.toFixed(1)}</td>
     <td class="num">${inst.bar_count ?? "—"}</td>
