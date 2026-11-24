@@ -41,7 +41,12 @@ def collect_native(state,auth,stop):
         with httpx.Client(http2=True,timeout=httpx.Timeout(20.0,connect=10.0),
                           limits=httpx.Limits(max_connections=32,max_keepalive_connections=16),
                           trust_env=False,follow_redirects=False) as client:
-            def run(service,payload,decode,apply,report,label):
+            def run(service,payload,decode,apply,report,label,capability=None):
+                observed=False
+                def remember(status):
+                    if capability is not None:
+                        symbol,kind=capability
+                        state.capabilities.remember(symbol,kind,status)
                 for attempt in range(3):
                     if cycle.is_set() or stop.is_set():
                         return
@@ -60,6 +65,11 @@ def collect_native(state,auth,stop):
                                         report(reason)
                                         deny(reason)
                                         return
+                                    if capability is not None and grpc in (3,5,12):
+                                        result="unsupported" if grpc==12 else "unavailable"
+                                        remember(result)
+                                        report(result)
+                                        return
                                     if http or grpc not in (0,None) or raw.get("error"):
                                         report(f"service unavailable ({http or grpc or raw.get('error')})")
                                         return
@@ -67,11 +77,22 @@ def collect_native(state,auth,stop):
                                 item=decode(raw)
                                 if item is not None and apply(item) is False:
                                     return
+                                if capability is not None and item and not observed:
+                                    observed=True
+                                    remember("observed")
                         finally:
                             stream.close()
+                        if capability is not None and not observed:
+                            remember("no_data")
+                            report("no_data")
+                            return
                         report("stream ended")
                     except (httpx.HTTPError,ValueError,RuntimeError) as exc:
                         if cycle.is_set() or stop.is_set():
+                            return
+                        if capability is not None and not observed and isinstance(exc,httpx.ReadTimeout):
+                            remember("no_data")
+                            report("no_data")
                             return
                         report(type(exc).__name__)
                         if isinstance(exc,ValueError):
@@ -84,6 +105,7 @@ def collect_native(state,auth,stop):
                 t=threading.Thread(target=run,args=args,daemon=True)
                 workers.append(t)
                 t.start()
+                return t
 
             def on_quote(item):
                 code=item.get("status",0)
@@ -121,36 +143,45 @@ def collect_native(state,auth,stop):
                                candle_item,on_bar,report,f"{inst.symbol} {period}s")
                         if cycle.wait(0.20):
                             break
-                # Only subscribe to flow services confirmed by the user reports.
-                for key,flow in state.flows.items():
+                # Queue every entered ticker. Catalog information only prioritizes;
+                # a missing record never prevents discovery.
+                pending=state.capabilities.queue(state.flows,state.refresh_capabilities) if state.flows else []
+                active={}
+                decoders={"trades":trade_rows,"footprint":lambda raw:footprint_rows(raw,full=True),
+                          "orderbook":lambda raw:book_summary(raw,full=True),
+                          "heatmap":lambda raw:book_summary(raw,heat=True,full=True),"tpo":tpo_rows}
+
+                def launch_next():
+                    key,kind=pending.pop(0)
+                    flow=state.flows[key]
                     provider,symbol=flow.symbol.split(":",1)
-                    decoders={"trades":trade_rows,"footprint":lambda raw:footprint_rows(raw,full=True),
-                              "orderbook":lambda raw:book_summary(raw,full=True),
-                              "heatmap":lambda raw:book_summary(raw,heat=True,full=True),"tpo":tpo_rows}
-                    supported=("trades","footprint","tpo") if provider=="FXPPST" else tuple(decoders)
-                    requests=plans(symbol,provider)
-                    for kind in supported:
-                        if cycle.is_set() or stop.is_set():
-                            break
-                        service,payload,_=requests[kind]
-                        def apply(rows,f=flow,k=kind):
-                            f.ingest(k,rows)
-                            return True
-                        def report(reason,f=flow,k=kind):
-                            f.status(k,reason)
-                        launch(service,payload,decoders[kind],apply,report,f"{flow.symbol} {kind}")
-                        if cycle.wait(0.35):
-                            break
+                    service,payload,_=plans(symbol,provider)[kind]
+                    def apply(rows):
+                        flow.ingest(kind,rows)
+                        return True
+                    def report(reason):
+                        flow.status(kind,reason)
+                    active[(key,kind)]=launch(service,payload,decoders[kind],apply,report,
+                                             f"{flow.symbol} {kind}",(flow.symbol,kind))
+
+                state.refresh_capabilities=False  # force once, not on every renewal
+                next_launch=time.monotonic()
                 renew=False
                 next_record=time.monotonic()
                 while not stop.is_set() and not cycle.is_set():
+                    for job,thread in list(active.items()):
+                        if not thread.is_alive():
+                            del active[job]
+                    if pending and len(active)<state.flow_budget and time.monotonic()>=next_launch:
+                        launch_next()
+                        next_launch=time.monotonic()+0.5
                     if state.recorder is not None and time.monotonic()>=next_record:
                         state.record_flow()
                         next_record=time.monotonic()+1
                     if expiry is not None and time.time()>=expiry-45:
                         renew=True
                         break
-                    if not any(t.is_alive() for t in workers):
+                    if not pending and not any(t.is_alive() for t in workers):
                         break
                     stop.wait(0.25)
             finally:
@@ -162,7 +193,8 @@ def collect_native(state,auth,stop):
                 state.all_quotes("native streams paused")
                 for flow in state.flows.values():
                     for kind in list(flow.states):
-                        flow.status(kind,"paused")
+                        if flow.states[kind] not in ("no_data","unsupported","unavailable","cached_no_data","cached_unsupported","cached_unavailable"):
+                            flow.status(kind,"paused")
         if halt:
             state.stop(halt[0])
             print(halt[0]+". Resolve provider access before restarting.",flush=True)
