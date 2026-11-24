@@ -20,12 +20,30 @@ class NativeDashboardState:
         self.flow_budget=flow_budget
         self.refresh_capabilities=refresh_capabilities
         self.recorder=recorder
+        self.diagnostic_lock=threading.RLock()
+        self.diagnostics={}
         self.running=True
         self.reason="connecting native streams"
         self.data={i.key:dict(sessions={},last=None,received=None,exchange=None,
                               ticks=0,changes=0,quote_state="connecting",
                               bars={},micro_bars={},bar_state={},ready=set(),bar_updates=0)
                    for i in self.instruments}
+
+    def stream_event(self,label,event,detail=None):
+        with self.diagnostic_lock:
+            r=self.diagnostics.setdefault(label,dict(attempts=0,messages=0,errors=0,retries=0,renewals=0))
+            name={"attempt":"attempts","message":"messages","error":"errors","retry":"retries","renewal":"renewals"}[event]
+            r[name]+=1
+            r["last_event"]=event
+            r["last_event_epoch"]=time.time()
+            if event=="message":
+                r["last_message_epoch"]=r["last_event_epoch"]
+            if detail is not None:
+                r["detail"]=detail
+
+    def diagnostic_snapshot(self):
+        with self.diagnostic_lock:
+            return {k:dict(v) for k,v in self.diagnostics.items()}
 
     def quote_state(self,key,reason):
         with self.lock:
@@ -112,7 +130,7 @@ class NativeDashboardState:
         if self.recorder is None:
             return
         try:
-            self.recorder.write(self.flow_snapshot())
+            self.recorder.write_snapshot(self.snapshot(True))
         except (OSError,RuntimeError):
             print('Flow recording disabled after local write error.',flush=True)
             self.recorder.close()
@@ -221,6 +239,7 @@ class NativeDashboardState:
                 history_ready=sum(i["history_ready"] for i in instruments),generated_utc=utc(now),
                 uptime_seconds=time.monotonic()-self.started)
         if with_series:
+            payload["diagnostics"]=self.diagnostic_snapshot()
             # Compute outside the lock so streaming updates aren't blocked by correlation.
             keys=[i.key for i in self.instruments]
             rs=[returns(i["bars"]) for i in instruments]
