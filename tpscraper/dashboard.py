@@ -142,7 +142,9 @@ def main(argv=None):
     p.add_argument("--interval",type=float,default=15,help="Minimum seconds per full watchlist sweep")
     p.add_argument("--requests-per-second",type=float,default=1,help="Global sequential request cap (1–3; increase only if provider permits)")
     p.add_argument("--snapshot",action="store_true",help="Legacy polling mode instead of native streams")
-    p.add_argument("--orderflow",action="store_true",help="Enable additional tested read-only market data subscriptions")
+    p.add_argument("--orderflow",action="store_true",help="Discover advanced market data for every requested instrument")
+    p.add_argument("--flow-budget",type=int,default=24,help="Maximum concurrent advanced subscriptions; increase only if provider permits (1-60)")
+    p.add_argument("--refresh-capabilities",action="store_true",help="Retest cached unavailable capabilities once at startup")
     p.add_argument("--authorized",action="store_true",help="Confirm account/provider permission for additional programmatic subscriptions")
     p.add_argument("--record-flow",type=Path,help="Optional local SQLite feature journal")
     p.add_argument("--native-30s",action="store_true",help="Optional extra 30-second candle subscription per instrument")
@@ -158,6 +160,10 @@ def main(argv=None):
     args=p.parse_args(argv)
     if not 1<=args.requests_per_second<=3 or not 1<=args.interval<=3600 or not 1<=args.history<=1440 or not 1024<=args.port<=65535:
         p.error("Invalid interval, port or history")
+    if not 1<=args.flow_budget<=60:
+        p.error("--flow-budget must be 1-60")
+    if args.refresh_capabilities and not args.orderflow:
+        p.error("--refresh-capabilities requires --orderflow")
     if args.auto_renew and (args.snapshot or not args.authorized):
         p.error("--auto-renew requires native mode and --authorized")
     if args.orderflow and (args.snapshot or not args.authorized):
@@ -215,7 +221,7 @@ def main(argv=None):
                 recorder=FlowRecorder(args.record_flow)
             except (OSError,sqlite3.Error):
                 p.error("Could not open local feature journal")
-        state=NativeDashboardState(instruments,args.history,args.native_30s,args.orderflow,recorder)
+        state=NativeDashboardState(instruments,args.history,args.native_30s,args.orderflow,recorder,args.flow_budget,args.refresh_capabilities)
     stop=threading.Event()
     server=None
     thread=None
