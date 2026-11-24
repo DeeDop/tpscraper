@@ -1,6 +1,7 @@
 """Loopback dashboard and predictor API, backed by TakeProfit snapshot polling."""
 import argparse
 import json
+import sqlite3
 import threading
 import time
 import webbrowser
@@ -11,6 +12,7 @@ import httpx
 
 from .__main__ import probe
 from .dashboard_state import DashboardState
+from .history_cache import HistoryCache
 from .instruments import WATCHLISTS, Instrument
 from .local_chrome import LocalChromeAuth, open_chrome
 from .credential_store import CredentialStore, StoreError
@@ -130,6 +132,7 @@ def main(argv=None):
     p.add_argument("--host",choices=("127.0.0.1",),default="127.0.0.1")
     p.add_argument("--interval",type=float,default=15,help="Minimum seconds per full watchlist sweep")
     p.add_argument("--requests-per-second",type=float,default=1,help="Global sequential request cap (1–3; increase only if provider permits)")
+    p.add_argument("--no-cache",action="store_true",help="Do not persist or restore local sampled bars")
     p.add_argument("--history",type=int,default=360,help="Local 1-minute bar retention")
     p.add_argument("--resolution",choices=("1",),default="1",help="Local base bars are one minute")
     p.add_argument("--no-browser",action="store_true")
@@ -161,7 +164,24 @@ def main(argv=None):
         except StoreError as exc:
             print(str(exc)+" Continuing in memory only.")
     auth=LocalChromeAuth(store=store,opener=lambda:open_chrome(args.chrome_profile))
-    state=DashboardState(instruments,args.history,max(args.interval,len(instruments)/args.requests_per_second))
+    cache=None
+    if not args.no_cache:
+        try:
+            cache=HistoryCache()
+            cache.prune()
+        except (OSError,sqlite3.Error):
+            if cache is not None:
+                cache.close()
+            cache=None
+            print("Local sample cache unavailable; continuing in memory.")
+    try:
+        state=DashboardState(instruments,args.history,max(args.interval,len(instruments)/args.requests_per_second),cache=cache)
+    except (OSError,sqlite3.Error):
+        if cache is not None:
+            cache.close()
+        cache=None
+        state=DashboardState(instruments,args.history,max(args.interval,len(instruments)/args.requests_per_second))
+    print(f"Restored {state.cached_bars} local one-minute bars; no exchange backfill yet.",flush=True)
     stop=threading.Event()
     server=None
     thread=None
@@ -196,6 +216,8 @@ def main(argv=None):
                 server.shutdown()
             server.server_close()
         auth.close()
+        if cache is not None:
+            cache.close()
 
 if __name__=="__main__":
     main()
