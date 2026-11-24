@@ -132,7 +132,7 @@ class FlowState:
                         self.trade_started=now
                     if len(self.trades)==self.trades.maxlen:
                         self.trade_evicted_at=now
-                    self.trades.append(dict(r))
+                    self.trades.append(dict(r,received_epoch=now))
                 elif kind=="orderbook":
                     try:
                         self.book.apply(r,now)
@@ -169,7 +169,13 @@ class FlowState:
                 freshness="stale" if v=="receiving" and (age is None or age>5) else "live" if v=="receiving" else v
                 streams[k]=dict(status=freshness,connection_status=v,receipt_age_s=age)
             recent=[r for r in self.trades if now-60<=r["time"]<=now+2]
-            latest=max((r["time"] for r in recent),default=None)
+            newest=max(recent,key=lambda r:(r["time"],r["received_epoch"]),default=None)
+            latest=newest["time"] if newest else None
+            trade_price=None
+            if newest is not None:
+                age=now-newest["time"]
+                receipt_age=now-newest["received_epoch"]
+                trade_price=dict(price=newest["price"],event_epoch=newest["time"],received_epoch=newest["received_epoch"],event_age_s=age,receipt_age_s=receipt_age,arrival_lag_s=newest["received_epoch"]-newest["time"],fresh=bool(self.states.get("trades")=="receiving" and -2<=age<=5 and 0<=receipt_age<=5))
             windows={}
             for seconds in (5,15,30,60):
                 rows=[r for r in recent if r["time"]>=now-seconds]
@@ -191,7 +197,7 @@ class FlowState:
                 self.states.get("footprint")=="receiving" and now-self.received.get("footprint",0)<=5)
             book=self.book.summary(now)
             out=dict(symbol=self.symbol,quantity_semantics=self.units,streams=streams,trade_windows=windows,
-                     latest_trade_timestamp=latest,duplicates=self.duplicate_count,
+                     latest_trade_timestamp=latest,latest_trade=trade_price,duplicates=self.duplicate_count,
                      unidentified=self.unidentified_count,book_gaps=self.version_gaps,book=book,
                      footprint=dict(latest={k:v for k,v in profile.items() if k!="levels"} if profile else None,
                          fresh=profile_fresh,closed_window_cvd=cvd,closed_profiles=len(closed)),
