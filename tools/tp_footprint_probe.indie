@@ -1,0 +1,27 @@
+# indie:lang_version = 5
+from indie import indicator, MainContext, TimeFrame, Series, request_series, plot, color
+from indie.data import VolumeFootprintProfile, sources
+from indie.data.sources import session_types
+
+@indicator('TP Data Probe - Native Footprint')
+@plot.line(title='Buy volume', color=color.GREEN)
+@plot.line(title='Sell volume', color=color.RED)
+@plot.line(title='Volume delta', color=color.BLUE)
+@plot.line(title='Total footprint volume', color=color.GRAY)
+class Main(MainContext):
+    def __init__(self):
+        self._footprints: Series[VolumeFootprintProfile] = (
+            request_series[VolumeFootprintProfile](
+                source=sources.VolumeFootprint(
+                    session_types=[session_types.MAIN_SESSION],
+                    row_size_ticks=0,
+                ),
+                time_frame=TimeFrame.from_str('1m'),
+            )
+        )
+
+    def calc(self):
+        profile = self._footprints[0]
+        buy = profile.total_volume_buy
+        sell = profile.total_volume_sell
+        return buy, sell, buy - sell, buy + sell
