@@ -6,6 +6,7 @@ This is a heuristic audit, not a guarantee that no secrets exist.
 import argparse
 import collections
 import math
+import os
 import re
 import subprocess
 
@@ -59,6 +60,13 @@ def placeholder(value):
     return (
         lower.startswith((b"synthetic", b"example", b"dummy", b"placeholder", b"test-", b"rotated-synthetic"))
         or lower in {b"your_token_here", b"your_api_key", b"not-a-real-token"}
+        # Exact harmless constants and regression fixtures, not blanket
+        # exceptions for entire files or test directories.
+        or value in {
+            b"https://takeprofit.com/api/auth/token",
+            b"eyJhbGciOiJub25lIn0.",
+            b"token=rotated-synthetic; Path=/; Secure; HttpOnly",
+        }
         or value.startswith((b"$" + b"{", b"<", b"{"))
         or re.fullmatch(rb"[xX*_.-]+", value) is not None
     )
@@ -66,6 +74,13 @@ def placeholder(value):
 
 def findings(data):
     result = []
+    # Compare repository references to the current owner without embedding
+    # former account names in this script.
+    owner = os.environ.get("GITHUB_REPOSITORY", "").partition("/")[0].encode().lower()
+    if owner:
+        for m in re.finditer(rb"(?i)github\.com/([A-Za-z0-9_-]+)/(?:tpscraper|tvscraper)\b", data):
+            if m.group(1).lower() != owner:
+                result.append(("other-repository-owner", data.count(b"\n", 0, m.start()) + 1))
     for name, rule in RULES.items():
         for match in rule.finditer(data):
             value = match.group()
