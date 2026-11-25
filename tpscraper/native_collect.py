@@ -46,6 +46,8 @@ def collect_native(state,auth,stop):
         if generation>1 and expiry is not None and (previous_expiry is None or expiry>previous_expiry):
             state.stream_event("authorization","renewal_success")
         previous_expiry=expiry
+        remaining=max(0,expiry-time.time()) if expiry is not None else 0
+        lead=max(45,min(getattr(auth,"renewal_lead_seconds",45),remaining/2))
         cycle=threading.Event()
         halt=[]
         halt_lock=threading.Lock()
@@ -248,7 +250,7 @@ def collect_native(state,auth,stop):
                     if state.recorder is not None and time.monotonic()>=next_record:
                         state.record_flow()
                         next_record=time.monotonic()+1
-                    if expiry is not None and time.time()>=expiry-45:
+                    if expiry is not None and time.time()>=expiry-lead:
                         state.stream_event("authorization","renewal")
                         if hasattr(auth,"prepare_renewal"):
                             try:
