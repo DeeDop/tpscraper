@@ -8,7 +8,7 @@ This is an unofficial integration. Use it only with your own account and where t
 
 ## Project origins
 
-`tpscraper` is a separately maintained TakeProfit adaptation of [tvscraper](https://github.com/Tekyyy/tvscraper), originally developed by Tekyyy, and builds on the work in [DeeDop/tvscraper](https://github.com/DeeDop/tvscraper). The upstream project targets TradingView; this project targets TakeProfit and provides its own authorization, transport, dashboard, and Windows distribution. The repositories are maintained separately.
+`tpscraper` is a separately maintained TakeProfit adaptation of [tvscraper](https://github.com/Tekyyy/tvscraper), originally developed by @Tekyyy, and builds on the work in [DeeDop/tvscraper](https://github.com/DeeDop/tvscraper). The upstream project targets TradingView; this project targets TakeProfit and provides its own authorization, transport, dashboard, and Windows distribution. The repositories are maintained separately.
 
 The original project is MIT-licensed. Its copyright notice is retained in [LICENSE](LICENSE), alongside the notice for this project's modifications.
 
