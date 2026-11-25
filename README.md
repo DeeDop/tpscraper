@@ -6,6 +6,12 @@ Designed for developers who need one local price-feed service for multiple instr
 
 This is an unofficial integration. Use it only with your own account and where the platform and its data providers permit programmatic access. It does not grant exchange entitlements, guarantee real-time prices, place trades, or redistribute market data. For supported commercial integrations, see [TakeProfit's Platform API](https://www.takeprofit.com/docs/platform-api/overview).
 
+## Project origins
+
+`tpscraper` is a separately maintained TakeProfit adaptation of [tvscraper](https://github.com/Tekyyy/tvscraper), originally developed by Tekyyy, and builds on the work in [DeeDop/tvscraper](https://github.com/DeeDop/tvscraper). The upstream project targets TradingView; this project targets TakeProfit and provides its own authorization, transport, dashboard, and Windows distribution. The repositories are maintained separately.
+
+The original project is MIT-licensed. Its copyright notice is retained in [LICENSE](LICENSE), alongside the notice for this project's modifications.
+
 ## What you can build
 
 Run one collector and let several local applications consume the same market-data feed instead of opening separate upstream connections for each application.
@@ -149,4 +155,4 @@ py -m unittest discover -s tests -v
 
 The offline test suite uses synthetic fixtures, decoder regression fixtures and local loopback services. Live account access, browser renewal, provider availability and long-running resource usage require separate integration testing.
 
-The project remains pre-release. Do not expose the API publicly, commit account credentials, or redistribute provider data. A source-code license and publication review are required before a public release.
+The project remains pre-release. Do not expose the API publicly, commit account credentials, or redistribute provider data. Source code is available under the [MIT License](LICENSE); platform access and data rights are separate.
