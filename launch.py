@@ -57,8 +57,10 @@ def main(argv=None):
         if args == ["--check"]:
             run([str(python), "-m", "pip", "check"])
             run([str(python), "-m", "tpscraper", "dashboard", "--help"])
+            run([str(python), "-c", "from pathlib import Path; from tpscraper.catalog import load_catalog; import tpscraper; assert (Path(tpscraper.__file__).parent / 'static' / 'dashboard.html').is_file(); assert load_catalog(); print('Local assets and instrument catalog available.')"])
             return 0
-        if not args:
+        if not args or args == ["--reset-pairing"]:
+            reset = bool(args)
             print("Connect through your own signed-in TakeProfit Chrome session.")
             print("Load the chrome-renew folder in Chrome if not already installed.")
             answer = input("Do you have permission for these market-data subscriptions? [y/N]: ")
@@ -67,6 +69,8 @@ def main(argv=None):
                 return 0
             args = ["dashboard", "--workspace", "--watchlist", "btc",
                     "--authorized", "--auto-renew", "--orderflow"]
+            if reset:
+                args.append("--reset-pairing")
         return subprocess.call([str(python), "-m", "tpscraper", *args], cwd=ROOT)
     except (OSError, subprocess.CalledProcessError, ValueError) as exc:
         print("Unable to prepare or launch tpscraper:", type(exc).__name__, file=sys.stderr)
