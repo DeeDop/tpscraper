@@ -14,7 +14,7 @@ import zipfile
 from audit_repository import RULES, ASSIGNMENT, SECRET_RULES, placeholder, entropy
 
 # Hosted-runner paths are not personal computer paths.
-RUNNER_NAMES = {b"runner", b"runneradmin", b"vsts", b"circleci"}
+RUNNER_NAMES = {b"runner", b"runneradmin", b"runner~1", b"vsts", b"circleci"}
 HOSTED_EMAILS = (b"@users.noreply.github.com", b"@github.com",
                  b"@example.com", b"@example.org")
 EXTRA = {
