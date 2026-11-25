@@ -1,6 +1,6 @@
 const status = document.getElementById("status");
 async function render() {
-  const s = await chrome.storage.session.get("status");
+  const s = await chrome.storage.local.get("status");
   status.textContent = s.status || "Not paired.";
 }
 document.getElementById("enable").onclick = async () => {
