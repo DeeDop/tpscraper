@@ -316,7 +316,7 @@ def main(argv=None):
             if saved is not None:
                 instruments=instruments_for(saved)
         except (ValueError,TypeError,KeyError,OSError):
-            p.error("Saved workspace is invalid or unreadable; repair it in the dashboard")
+            print("Saved workspace is invalid or unreadable. Using the selected preset; save a new workspace in the dashboard.",flush=True)
     if args.ticker:
         if len(args.ticker)>12:
             p.error("Maximum 12 instruments per process")
