@@ -129,7 +129,8 @@ function restore() {
     await chrome.storage.local.setAccessLevel({accessLevel: "TRUSTED_CONTEXTS"});
     const {pair} = await chrome.storage.local.get("pair");
     if (pair) {
-      await ensureAlarm();
+      // Alarm creation may fail transiently; a dashboard wake can still poll.
+      await ensureAlarm().catch(() => {});
       await poll();
     }
   })().finally(() => { restoring = null; });
