@@ -28,6 +28,35 @@ from . import __version__
 from .workspace import load_workspace,save_workspace,preset_pairs,instruments_for
 
 
+class LocalServer(ThreadingHTTPServer):
+    daemon_threads=True
+
+    def __init__(self,*args,**kwargs):
+        self.slots=threading.BoundedSemaphore(16)
+        super().__init__(*args,**kwargs)
+
+    def process_request(self,request,client_address):
+        if not self.slots.acquire(blocking=False):
+            try:
+                request.settimeout(1)
+                request.sendall(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            except OSError:
+                pass
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request,client_address)
+        except BaseException:
+            self.slots.release()
+            raise
+
+    def process_request_thread(self,request,client_address):
+        try:
+            super().process_request_thread(request,client_address)
+        finally:
+            self.slots.release()
+
+
 class DashboardHandler(BaseHTTPRequestHandler):
     protocol_version="HTTP/1.1"
 
@@ -36,8 +65,24 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.stop=stop
         super().__init__(*args,**kwargs)
 
+    def setup(self):
+        super().setup()
+        self.connection.settimeout(10)
+
     def log_message(self,*args):
         pass
+
+    def send_error(self,code,message=None,explain=None):
+        self.close_connection=True
+        body=json.dumps({"api_version":1,"error":{"status":code,"message":message or self.responses.get(code,("Request failed",))[0]}}).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type","application/json")
+        self.send_header("Cache-Control","no-store")
+        self.send_header("Connection","close")
+        self.send_header("Content-Length",str(len(body)))
+        self.end_headers()
+        if getattr(self,"command",None)!="HEAD":
+            self.wfile.write(body)
 
     def send_body(self,body,kind):
         self.send_response(200)
@@ -105,7 +150,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     self.wfile.write(("event: quotes\ndata: "+json.dumps(self.quote_payload(payload),allow_nan=False)+"\n\n").encode())
                     self.wfile.flush()
                     self.stop.wait(0.25)
-            except OSError:
+            except (OSError,ValueError,TypeError):
                 pass
             return
         if route=="/api/snapshot":
@@ -148,7 +193,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             except ValueError:
                 self.send_error(400,"Require key, resolution 30 or 60, limit 1-1000")
                 return
-            data=self.state.snapshot(True)
+            data=self.state.snapshot(True,with_analysis=False) if isinstance(self.state,NativeDashboardState) else self.state.snapshot(True)
             inst=next((i for i in data["instruments"] if i["key"]==key),None)
             if inst is None:
                 self.send_error(404,"Unknown instrument key")
@@ -164,12 +209,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
                          receiving=sum(q["status"] in ("LIVE","UNVERIFIED") for q in data["quotes"].values()),
                          history_ready=data.get("history_ready",0),
                          timestamped_live_count=sum(q.get("live_price_usable",False) for q in data["quotes"].values()),
-                         fresh_book_count=sum(bool(q.get("orderflow",{}).get("book",{}).get("fresh")) for q in data["quotes"].values()),
+                         fresh_book_count=sum(bool((q.get("orderflow") or {}).get("book",{}).get("fresh")) for q in data["quotes"].values()),
                          uptime_seconds=data.get("uptime_seconds"),process_id=os.getpid(),python_threads=threading.active_count())
         else:
             self.send_error(404)
             return
-        self.send_body(json.dumps(payload,allow_nan=False).encode(),"application/json")
+        try:
+            body=json.dumps(payload,allow_nan=False).encode()
+        except (ValueError,TypeError):
+            self.send_error(503,"Market data snapshot unavailable")
+            return
+        self.send_body(body,"application/json")
 
     @staticmethod
     def quote_payload(payload):
@@ -333,7 +383,7 @@ def main(argv=None):
             auth=LocalChromeAuth(store=store,opener=lambda:open_chrome(args.chrome_profile))
         auth.headers()
         handler=partial(DashboardHandler,state,stop)
-        server=ThreadingHTTPServer((args.host,args.port),handler)
+        server=LocalServer((args.host,args.port),handler)
         server.daemon_threads=True
         thread=threading.Thread(target=server.serve_forever,daemon=True)
         thread.start()
