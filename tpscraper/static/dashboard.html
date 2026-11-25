@@ -324,7 +324,7 @@ body { padding: clamp(9px,1.5vw,24px); }
 <details><summary>Per-stream diagnostics</summary><div class="scroll"><table id="diag-view"></table></div></details>
 </section>
 <section class="card" id="catalog-card">
-<h2>Manage instruments</h2><p class="sub">Choose a market preset or add exact ticker pairs. Save your workspace and restart with the command below; active feeds are not interrupted while editing.</p><div class="filters"><button id="use-active">Use active tickers</button><select id="preset-picker" aria-label="Research preset"><option value="">Choose preset…</option><option value="btc">BTC</option><option value="btc-depth">BTC spot + perpetual</option><option value="crypto15">Crypto watchlist</option><option value="gold">Gold + context</option><option value="markets15">Gold + FX</option><option value="realtime">General markets</option></select><button id="use-preset">Load preset</button><button id="clear-pairs">Clear</button><strong id="pair-count"></strong></div>
+<h2>Manage instruments</h2><p class="sub">Choose a market preset or add exact ticker pairs. Save your workspace and restart from the checkout with the command below (use .\\run.cmd in PowerShell or python3 launch.py on Linux/macOS); active feeds are not interrupted while editing.</p><div class="filters"><button id="use-active">Use active tickers</button><select id="preset-picker" aria-label="Research preset"><option value="">Choose preset…</option><option value="btc">BTC</option><option value="btc-depth">BTC spot + perpetual</option><option value="crypto15">Crypto watchlist</option><option value="gold">Gold + context</option><option value="markets15">Gold + FX</option><option value="realtime">General markets</option></select><button id="use-preset">Load preset</button><button id="clear-pairs">Clear</button><strong id="pair-count"></strong></div>
 <div class="filters"><input id="catalog-query" placeholder="BTC, gold, provider..." aria-label="Search instruments"><button id="catalog-search">Search</button><input id="manual-pair" placeholder="PROVIDER:TICKER" aria-label="Exact ticker"><button id="catalog-add">Add exact pair</button></div>
 <div class="scroll"><table id="catalog-results"></table></div>
 <div id="saved-pairs" class="flow-status"></div><textarea id="launch-command" readonly rows="3" style="width:100%" aria-label="PowerShell launch command"></textarea><button id="save-workspace">Save workspace</button> <button id="copy-command">Copy restart command</button> <span id="workspace-status" role="status"></span>
@@ -1367,7 +1367,7 @@ function showSavedPairs(){
   }
   try{localStorage.setItem("tp-watchlist",JSON.stringify(savedPairs));}catch{}
   document.getElementById("pair-count").textContent=savedPairs.length+" / 12 selected";
-  document.getElementById("launch-command").value="py -m tpscraper dashboard --workspace --watchlist btc --remember --orderflow --authorized --auto-renew";
+  document.getElementById("launch-command").value="run.cmd dashboard --workspace --watchlist btc --orderflow --authorized --auto-renew";
 }
 function addPair(p){const status=document.getElementById("workspace-status");if(!validPair(p)){status.textContent="Use exact PROVIDER:TICKER.";return;}if(savedPairs.includes(p)){status.textContent="Already selected.";return;}if(savedPairs.length>=12){status.textContent="12 instrument limit reached.";return;}savedPairs.push(p);showSavedPairs();status.textContent="Unsaved changes";}
 document.getElementById("catalog-add").onclick=()=>addPair(document.getElementById("manual-pair").value.trim());
