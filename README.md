@@ -62,7 +62,7 @@ Pair once on each computer and in each Chrome profile you intend to use. Credent
 
 Open **http://127.0.0.1:8789/**. Stop the service with Ctrl+C.
 
-> Existing installations: use extension v1.2.0 or newer. Keep the extension in the same installed folder and reload it when updating. If the console says a saved pairing was loaded, open the popup and click **Check connection now**; do not reset pairing unless it is missing or mismatched. See [automatic connection and updates](docs/SETUP.md#automatic-connection-and-updates).
+> Existing installations: use extension v1.3.0 or newer (Chrome 120+). Keep the extension in the same installed folder and reload it when updating. The dashboard opens in Chrome and wakes the paired extension automatically; the popup is only a diagnostic fallback. Do not reset pairing unless it is missing or mismatched. See [automatic connection and updates](docs/SETUP.md#automatic-connection-and-updates).
 
 ## Instruments
 
