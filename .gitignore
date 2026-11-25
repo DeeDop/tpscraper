@@ -11,3 +11,25 @@ probe_result.json
 secrets/
 
 *.dpapi
+
+# Local builds and editor state
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.coverage
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local recordings and credentials
+*.jsonl
+*.pem
+*.key
+*.pfx
+*.p12
+*_report.json
+tp-candle-bodies*.json
+workspace.json
+capabilities.json
