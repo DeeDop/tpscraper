@@ -59,6 +59,8 @@ open the extension popup and click Check connection now (v1.2.0 or newer).
 Reset pairing only if missing or mismatched. See docs/SETUP.md for recovery.
 Do not copy credentials between computers.
 
+Derived from tvscraper (https://github.com/Tekyyy/tvscraper), originally
+by Tekyyy. See LICENSE for the upstream and adaptation MIT notices.
 See docs/API.md for integration and docs/INSTRUMENTS.md for ticker discovery.
 The service is loopback-only. Use only with your own authorized account,
 within provider terms and subscription limits. It is an unofficial,
@@ -132,6 +134,7 @@ def build(output):
         for name in DOCS:
             shutil.copy2(ROOT / "docs" / name, stage / "docs" / name)
         shutil.copy2(ROOT / "SECURITY.md", stage / "SECURITY.md")
+        shutil.copy2(ROOT / "LICENSE", stage / "LICENSE")
         (stage / "README.md").write_text(README, encoding="utf-8")
         (stage / "run.cmd").write_text(RUN_CMD, encoding="ascii")
         notices(stage)
@@ -141,7 +144,7 @@ def build(output):
         # The archive is produced solely from the fresh build directory,
         # never from the checkout or local AppData.
         expected = {"tpscraper.exe", "_internal", "chrome-renew", "docs",
-                    "third-party-notices", "README.md", "SECURITY.md", "run.cmd"}
+                    "third-party-notices", "README.md", "SECURITY.md", "LICENSE", "run.cmd"}
         if {p.name for p in stage.iterdir()} != expected:
             raise RuntimeError("Unexpected top-level distribution files")
         archive = output / "tpscraper-windows-x64.zip"
