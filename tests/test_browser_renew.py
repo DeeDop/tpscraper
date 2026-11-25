@@ -2,11 +2,12 @@
 import base64
 import json
 import threading
+from unittest.mock import Mock
 import time
 import unittest
 from urllib.request import Request,urlopen
 from urllib.error import HTTPError
-from tpscraper.browser_renew import RenewalBridge
+from tpscraper.browser_renew import RenewalBridge, load_pairing
 from tpscraper.auth import AuthError
 
 class BridgeTests(unittest.TestCase):
@@ -48,20 +49,39 @@ class BridgeTests(unittest.TestCase):
         t=self.start()
         claim=base64.urlsafe_b64encode(json.dumps({"exp":time.time()+600}).encode()).decode().rstrip("=")
         token="eyJhbGciOiJub25lIn0."+claim+".test"
-        self.assertTrue(self.req("/token",{"accessToken":token})["accepted"])
+        request_id=self.req("/status")["request_id"]
+        body={"accessToken":token,"request_id":request_id}
+        with self.assertRaises(HTTPError) as cm:
+            self.req("/token",dict(body,request_id="wrong"))
+        with cm.exception as response:
+            self.assertEqual(response.code,409)
+        self.assertTrue(self.req("/token",body)["accepted"])
         t.join(4)
         self.assertEqual(self.out,[token])
         self.assertFalse(self.req("/status")["renew"])
         with self.assertRaises(HTTPError) as cm:
-            self.req("/token",{"accessToken":token})
+            self.req("/token",body)
         with cm.exception as response:
             self.assertEqual(response.code,409)
 
     def test_denied(self):
         t=self.start()
-        self.req("/failure",{})
+        self.req("/failure",{"request_id":self.req("/status")["request_id"]})
         t.join(4)
         self.assertEqual(self.out,["denied"])
+
+class PairingTests(unittest.TestCase):
+    def test_persistent_pairing(self):
+        store=Mock()
+        store.load.return_value=None
+        first,created=load_pairing(store)
+        self.assertTrue(created)
+        store.save.assert_called_once_with(first)
+        store.load.return_value=first
+        self.assertEqual(load_pairing(store),(first,False))
+        second,created=load_pairing(store,reset=True)
+        self.assertTrue(created)
+        self.assertNotEqual(first,second)
 
 if __name__=="__main__":
     unittest.main()
