@@ -9,6 +9,7 @@ import json
 import secrets
 import re
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from .local_chrome import LocalChromeAuth, parse_access
 from .auth import AuthError, expires_at
@@ -23,11 +24,16 @@ class RenewalBridge:
         self.lock=threading.Lock()
         self.ready=threading.Event()
         self.pending=False
+        self.request_in_progress=False
         self.token=None
         self.failure=False
         bridge=self
 
         class Handler(BaseHTTPRequestHandler):
+            def setup(self):
+                super().setup()
+                self.connection.settimeout(5)
+
             def log_message(self,*args):
                 pass
 
@@ -87,26 +93,34 @@ class RenewalBridge:
 
     def request(self,timeout=100):
         with self.lock:
-            if self.closed or self.pending:
+            if self.closed or self.request_in_progress:
                 raise AuthError("Renewal bridge closed or busy.")
+            self.request_in_progress=True
             self.ready.clear()
             self.request_id=secrets.token_urlsafe(24)
             self.pending=True
             self.token=None
             self.failure=False
-        self.ready.wait(timeout)
-        with self.lock:
-            self.pending=False
-            value=self.token
-            self.token=None
-            failed=self.failure
-        if not value:
-            raise AuthError("Browser renewal denied or sign-in expired." if failed else
-                            "Browser renewal timed out. Check the paired Chrome extension and signed-in account.")
-        return value
+        try:
+            self.ready.wait(timeout)
+            with self.lock:
+                value=self.token
+                failed=self.failure
+            if not value:
+                raise AuthError("Browser renewal denied or sign-in expired." if failed else
+                                "Browser renewal timed out. Check Chrome and its pairing.")
+            return value
+        finally:
+            with self.lock:
+                self.pending=False
+                self.request_in_progress=False
+                self.token=None
+                self.request_id=None
 
     def close(self):
         with self.lock:
+            if self.closed:
+                return
             self.closed=True
             self.pending=False
             self.token=None
@@ -151,9 +165,11 @@ class BrowserRenewAuth(LocalChromeAuth):
         if not persistent:
             self.emit("Secure pairing storage unavailable; pair again next launch.")
 
-    def refresh(self):
+    renewal_lead_seconds=75
+
+    def refresh(self,timeout=100):
         self.emit("Requesting authorization from Chrome...")
-        value=self.bridge.request()
+        value=self.bridge.request(timeout=timeout)
         self._access=value
         self.renewals+=1
         if self.store is not None:
@@ -166,7 +182,8 @@ class BrowserRenewAuth(LocalChromeAuth):
 
     def prepare_renewal(self):
         old=expires_at(self._access) if self._access else None
-        value=self.refresh()
+        timeout=min(65,max(1,old-time.time()-5)) if old is not None else 65
+        value=self.refresh(timeout=timeout)
         if old is not None and expires_at(value)<=old:
             raise AuthError("Provider did not extend the token expiration.")
 
