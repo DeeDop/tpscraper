@@ -1,4 +1,4 @@
-"""Loopback dashboard and predictor API with native TakeProfit streams by default."""
+"""Local HTTP and SSE interface for market data."""
 import argparse
 import json
 import os
@@ -24,6 +24,7 @@ from .local_chrome import LocalChromeAuth, open_chrome
 from .credential_store import CredentialStore, StoreError
 from .auth import AuthError
 from .symbols import choose
+from . import __version__
 from .workspace import load_workspace,save_workspace,preset_pairs,instruments_for
 
 
@@ -43,6 +44,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type",kind)
         self.send_header("Content-Length",str(len(body)))
         self.send_header("Cache-Control","no-store")
+        self.send_header("X-Content-Type-Options","nosniff")
+        self.send_header("X-TPScraper-API-Version","1")
         self.end_headers()
         self.wfile.write(body)
 
@@ -66,13 +69,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_body(json.dumps({"saved":pairs,"restart_required":True}).encode(),"application/json")
 
     def do_GET(self):
+        if self.headers.get("Host")!=f"127.0.0.1:{self.server.server_port}":
+            self.send_error(403)
+            return
         url=urlsplit(self.path)
         route=url.path
         query=parse_qs(url.query)
         if route in ("/","/index.html"):
             self.send_body((Path(__file__).parent/"static"/"dashboard.html").read_bytes(),"text/html; charset=utf-8")
             return
-        if route=="/api/stream":
+        if route=="/api/version":
+            self.send_body(json.dumps({"api_version":1,"version":__version__}).encode(),"application/json")
+            return
+        if route=="/api/stream" or route=="/api/stream/quotes":
             self.send_response(200)
             self.send_header("Content-Type","text/event-stream")
             self.send_header("Cache-Control","no-cache")
@@ -84,12 +93,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
             try:
                 while not self.stop.is_set():
                     now=time.monotonic()
-                    full=now-last_full>=2
+                    quotes_only=route=="/api/stream/quotes"
+                    full=not quotes_only and now-last_full>=2
                     payload=self.state.snapshot(full)
                     if full:
                         last_full=now
                     event="full" if full else "tick"
-                    self.wfile.write(f"event: {event}\ndata: {json.dumps(payload,allow_nan=False)}\n\n".encode())
+                    if not quotes_only:
+                        self.wfile.write(f"event: {event}\ndata: {json.dumps(payload,allow_nan=False)}\n\n".encode())
                     # Compatible quotes event for headless consumers.
                     self.wfile.write(("event: quotes\ndata: "+json.dumps(self.quote_payload(payload),allow_nan=False)+"\n\n").encode())
                     self.wfile.flush()
@@ -119,6 +130,33 @@ class DashboardHandler(BaseHTTPRequestHandler):
             payload=catalog_payload(self.path)
         elif route=="/api/quotes":
             payload=self.quote_payload(self.state.snapshot(False))
+            key=query.get("key",[None])[0]
+            if key is not None:
+                if key not in payload["quotes"]:
+                    self.send_error(404,"Unknown instrument key")
+                    return
+                payload["quotes"]={key:payload["quotes"][key]}
+        elif route=="/api/instruments":
+            payload={"instruments":[{"key":i.key,"symbol":i.symbol,"name":i.name,"group":i.group,"decimals":i.decimals} for i in self.state.instruments]}
+        elif route=="/api/bars":
+            key=query.get("key",[None])[0]
+            period=query.get("resolution",["60"])[0]
+            try:
+                limit=int(query.get("limit",["360"])[0])
+                if period not in ("30","60") or not 1<=limit<=1000 or not key:
+                    raise ValueError()
+            except ValueError:
+                self.send_error(400,"Require key, resolution 30 or 60, limit 1-1000")
+                return
+            data=self.state.snapshot(True)
+            inst=next((i for i in data["instruments"] if i["key"]==key),None)
+            if inst is None:
+                self.send_error(404,"Unknown instrument key")
+                return
+            rows=inst.get("micro_bars" if period=="30" else "bars",[])
+            if query.get("closed",["0"])[0]=="1":
+                rows=[b for b in rows if b.get("closed") is True]
+            payload={"key":key,"symbol":inst["symbol"],"resolution_seconds":int(period),"history_ready":inst.get("history_ready",False) if period=="60" else None,"bars":rows[-limit:],"generated_utc":data["generated_utc"]}
         elif route=="/api/health":
             data=self.state.snapshot(False)
             payload=dict(connected=data["connected"],mode=data["mode"],reason=data["reason"],
@@ -135,7 +173,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     @staticmethod
     def quote_payload(payload):
-        return {k:payload[k] for k in ("quotes","connected","mode","reason","generated_utc")}
+        return dict(api_version=1,**{k:payload[k] for k in ("quotes","connected","mode","reason","generated_utc")})
 
 
 def collect(state,auth,stop,interval,client,request=probe,requests_per_second=1):
@@ -185,7 +223,7 @@ def main(argv=None):
     p.add_argument("--requests-per-second",type=float,default=1,help="Global sequential request cap (1–3; increase only if provider permits)")
     p.add_argument("--snapshot",action="store_true",help="Legacy polling mode instead of native streams")
     p.add_argument("--orderflow",action="store_true",help="Discover advanced market data for every requested instrument")
-    p.add_argument("--flow-budget",type=int,default=None,help="Maximum concurrent advanced subscriptions (default all five services per entered ticker; set a lower limit if needed, 1-60)")
+    p.add_argument("--flow-budget",type=int,default=None,help="Maximum concurrent advanced subscriptions (default up to 12; choose 1-60 within provider limits)")
     p.add_argument("--refresh-capabilities",action="store_true",help="Retest cached unavailable capabilities once at startup")
     p.add_argument("--authorized",action="store_true",help="Confirm account/provider permission for additional programmatic subscriptions")
     p.add_argument("--record-flow",type=Path,help="Optional local SQLite feature journal")
@@ -197,10 +235,8 @@ def main(argv=None):
     p.add_argument("--local-chrome",action="store_true",help="Regular Chrome authorization (default)")
     p.add_argument("--remember",action="store_true")
     renewal=p.add_mutually_exclusive_group()
-    renewal.add_argument("--auto-renew",action="store_true",help="Legacy paired Chrome extension renewal")
-    renewal.add_argument("--browser-renew",action="store_true",help="Use your existing signed-in Chrome with native connection permission")
-    renewal.add_argument("--dedicated-browser-renew",action="store_true",help="Optional separate Chrome profile")
-    p.add_argument("--browser-login",action="store_true",help="Sign in again in dedicated Chrome; requires --dedicated-browser-renew")
+    renewal.add_argument("--auto-renew","--browser-renew",dest="auto_renew",action="store_true",help="Authorize via the Chrome extension (persistent pairing on Windows)")
+    p.add_argument("--reset-pairing",action="store_true",help="Replace local Chrome pairing; requires --auto-renew")
     p.add_argument("--chrome-profile")
     p.add_argument("--ticker",action="append",default=[],help="Override preset with repeatable PROVIDER:TICKER values")
     p.add_argument("--workspace",action="store_true",help="Use watchlist saved from the dashboard; fallback to selected preset if none exists")
@@ -211,12 +247,10 @@ def main(argv=None):
         p.error("--flow-budget must be 1-60")
     if args.refresh_capabilities and not args.orderflow:
         p.error("--refresh-capabilities requires --orderflow")
-    if (args.auto_renew or args.browser_renew or args.dedicated_browser_renew) and (args.snapshot or not args.authorized):
+    if args.auto_renew and (args.snapshot or not args.authorized):
         p.error("Browser renewal requires native mode and --authorized")
-    if args.browser_login and not args.dedicated_browser_renew:
-        p.error("--browser-login requires --dedicated-browser-renew")
-    if (args.browser_renew or args.dedicated_browser_renew) and args.chrome_profile:
-        p.error("Browser renewal uses the connected browser context; --chrome-profile is for manual authorization")
+    if args.reset_pairing and not args.auto_renew:
+        p.error("--reset-pairing requires --auto-renew")
     if args.orderflow and (args.snapshot or not args.authorized):
         p.error("--orderflow requires native mode and --authorized")
     if args.record_flow and not args.orderflow:
@@ -286,21 +320,15 @@ def main(argv=None):
                 recorder=FlowRecorder(args.record_flow)
             except (OSError,sqlite3.Error):
                 p.error("Could not open local feature journal")
-        state=NativeDashboardState(instruments,args.history,args.native_30s,args.orderflow,recorder,args.flow_budget or min(60,5*len(instruments)),args.refresh_capabilities)
+        state=NativeDashboardState(instruments,args.history,args.native_30s,args.orderflow,recorder,args.flow_budget or min(12,5*len(instruments)),args.refresh_capabilities)
     stop=threading.Event()
     server=None
     thread=None
     try:
         # Authorize on main thread, before starting server.
-        if args.browser_renew:
-            from .existing_chrome import ExistingChromeAuth
-            auth=ExistingChromeAuth(store=store)
-        elif args.dedicated_browser_renew:
-            from .dedicated_chrome import DedicatedChromeAuth
-            auth=DedicatedChromeAuth(store=store,login=args.browser_login)
-        elif args.auto_renew:
+        if args.auto_renew:
             from .browser_renew import BrowserRenewAuth
-            auth=BrowserRenewAuth(store=store)
+            auth=BrowserRenewAuth(store=store,reset_pairing=args.reset_pairing)
         else:
             auth=LocalChromeAuth(store=store,opener=lambda:open_chrome(args.chrome_profile))
         auth.headers()
