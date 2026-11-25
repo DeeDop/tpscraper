@@ -48,7 +48,10 @@ async function poll() {
     }
     if (!status.ok || !(await isPaired(pair))) return;
     const request = await status.json();
-    if (!request.renew || typeof request.request_id !== "string") return;
+    if (!request.renew || typeof request.request_id !== "string") {
+      if (await isPaired(pair)) await chrome.storage.local.set({status: "Paired; local service connected. Waiting for renewal."});
+      return;
+    }
     let response;
     try {
       response = await fetch(TOKEN, {
@@ -136,6 +139,10 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       respond({ok: true});
       void poll();
     })().catch(() => respond({ok: false}));
+    return true;
+  }
+  if (message.type === "check") {
+    restore().then(() => respond({ok: true}), () => respond({ok: false}));
     return true;
   }
   if (message.type === "disable") {
