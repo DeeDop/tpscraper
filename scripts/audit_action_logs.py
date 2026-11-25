@@ -90,7 +90,13 @@ def audit(repo):
     bytes_read = 0
     counts = collections.Counter()
     failures = []
+    # A running workflow may not yet have a downloadable log archive.
+    # Report its exclusion separately instead of claiming it was scanned.
+    active = []
     for run in list_runs(repo):
+        if run.get("status") != "completed":
+            active.append(run["id"])
+            continue
         runs += 1
         for attempt in range(1, int(run.get("run_attempt") or 1) + 1):
             try:
@@ -122,6 +128,7 @@ def audit(repo):
     print("lines:", lines)
     print("bytes:", bytes_read)
     print("unavailable attempts:", len(failures))
+    print("active runs excluded:", len(active))
     for kind, count in sorted(counts.items()):
         print("COUNT", kind, count)
     if not counts:
