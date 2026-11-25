@@ -79,7 +79,6 @@ def main():
     parser.add_argument("--count", type=int, default=0, help="Number of observations; zero runs until stopped")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--session", action="store_true", help="Use existing experimental session renewal, if permitted")
-    mode.add_argument("--browser", action="store_true", help="Opt-in isolated Chrome authorization, if permitted")
     mode.add_argument("--local-chrome", action="store_true", help="Use regular installed Chrome with explicit local authorization handoff")
     parser.add_argument("--remember", action="store_true", help="Save access token using Windows DPAPI (local Chrome mode)")
     parser.add_argument("--chrome-profile", help="Existing Chrome profile directory: Default or Profile N")
@@ -118,9 +117,6 @@ def main():
                 except StoreError as exc:
                     print(str(exc) + " Continuing in memory only.")
             auth = LocalChromeAuth(store=store, opener=lambda: open_chrome(args.chrome_profile), ask=row.ask, emit=row.message)
-        elif args.browser:
-            from .browser_auth import BrowserAuth
-            auth = BrowserAuth(ask=row.ask, emit=row.message)
         else:
             auth = Auth.prompt(session=args.session)
         with httpx.Client(http2=True, timeout=10, follow_redirects=False, trust_env=False) as client:
