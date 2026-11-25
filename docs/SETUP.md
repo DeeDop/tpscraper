@@ -30,9 +30,11 @@ If using the system Python, replace the virtual-environment Python path with `py
 
 ## Pair once
 
+For the standalone Windows release, download the custom ZIP asset from [Releases](https://github.com/DeeDop/tpscraper/releases), not the automatic source archive. Extract all files, keep `_internal` next to the executable, and use `run.cmd`. Python and Git are not required for this distribution.
+
 1. Open your existing Chrome profile and sign in normally at takeprofit.com.
 2. Open `chrome://extensions/`, enable Developer mode, then Load unpacked; choose `chrome-renew`.
-3. Start the command above. Open the extension popup and enter the local pairing code printed by Python. Select **Authorize and pair**.
+3. Start `run.cmd` (or the source launch command above). Approve access. If a new pairing code is printed, enter it in the extension popup and select **Authorize and pair**. If the console reports a saved pairing, do not enter another code.
 4. Keep Chrome running. The dashboard opens once the account is authorized.
 
 The extension requests authorization only when a paired local process has a pending renewal request. It uses Chrome's existing signed-in session; it does not inspect cookies, browser storage, unrelated network traffic, or passwords. The pairing secret is saved in Chrome extension-local storage and in Windows current-user DPAPI storage. The provider token is not saved by the extension.
@@ -42,6 +44,24 @@ On later launches the paired extension recognizes the local process and performs
 If the extension is disabled, its pairing is lost, or the pairing secret is mismatched, stop the service and run with `--reset-pairing`. Reload the extension when upgrading its source. Select Disable renewal in the popup to remove its saved pairing. Existing provider credentials may remain valid until expiry; sign out of TakeProfit to end the browser session.
 
 Windows DPAPI is used for persistent local pairing. On other systems or if secure storage is unavailable, pairing is per-process. The Python launcher can also be invoked with `python3 launch.py` on Linux/macOS with Python 3.11+ and venv support. Automatic extension pairing is per process outside Windows; manual browser/clipboard behavior and live operation on those platforms are not release-tested.
+
+## Automatic connection and updates
+
+A pairing code is a persistent local shared secret, not a TakeProfit access token. Reusing the same code is intentional. Each startup requests fresh authorization through the paired Chrome extension; it does not reuse an old provider token.
+
+After the first successful pairing, stop tpscraper and restart it normally. The console should say **Saved local pairing loaded. No new code is required.** Keep Chrome open and signed in. The extension polls on its alarm, or immediately when you open its popup or click **Check connection now** (extension v1.2.0 or later). The popup shows whether a saved pairing exists. The console should then report **Chrome authorization accepted**.
+
+Chrome's unpacked extension is associated with its installed directory/profile. To keep pairing across application updates, install the extension once into a stable folder of your choice, outside version-specific release folders. On updates, close the running application, replace the four extension files in that same folder with the new release's files, and click Reload at chrome://extensions/. Keep only one tpscraper renewal extension enabled. Do not remove and reinstall an already paired extension unnecessarily.
+
+If the console reports a saved pairing but waits indefinitely, check that Chrome is signed in, that the popup reports a saved pairing, and that the enabled extension is v1.2.0 or newer. Open the popup and use Check connection now. If the extension has no saved pairing or reports a mismatch, stop tpscraper and run:
+
+```powershell
+.\run.cmd --reset-pairing
+```
+
+Pair with the newly displayed code once, then restart normally without the reset flag. On a source checkout, the equivalent is `py -m tpscraper dashboard --watchlist btc --authorized --auto-renew --orderflow --reset-pairing`. The older `--browser-renew` option is an alias for `--auto-renew`.
+
+If authorization is refused, resolve the account sign-in or entitlement issue before reconnecting. Never post pairing codes or access tokens in support logs. Saved pairing on disk alone does not demonstrate a working connection or renewal.
 
 ## Manual authorization
 
