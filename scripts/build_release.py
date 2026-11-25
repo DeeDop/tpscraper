@@ -12,7 +12,7 @@ import tempfile
 import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
-DOCS = ("API.md", "INSTRUMENTS.md")
+DOCS = ("API.md", "INSTRUMENTS.md", "SETUP.md")
 EXTENSION = ("manifest.json", "popup.html", "popup.js", "worker.js")
 PACKAGES = (
     "httpx", "httpcore", "h11", "h2", "hpack", "hyperframe", "certifi",
@@ -52,9 +52,12 @@ run.cmd --reset-pairing. To verify the installation without connecting to
 TakeProfit, run run.cmd --check. To run the API without opening the dashboard,
 run run.cmd serve --workspace --watchlist btc --authorized --auto-renew --orderflow.
 
-For updates, extract a new release into its own folder, reload the extension
-from that folder and start the new application. Do not copy credentials
-between computers. If Chrome changes the extension identity, pair again.
+For updates, keep the installed Chrome extension in the same directory.
+Replace its files from the new ZIP, then click Reload at chrome://extensions/.
+Disable duplicate old extensions. If the console reports saved pairing,
+open the extension popup and click Check connection now (v1.2.0 or newer).
+Reset pairing only if missing or mismatched. See docs/SETUP.md for recovery.
+Do not copy credentials between computers.
 
 See docs/API.md for integration and docs/INSTRUMENTS.md for ticker discovery.
 The service is loopback-only. Use only with your own authorized account,
