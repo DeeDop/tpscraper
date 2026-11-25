@@ -1,8 +1,27 @@
-# tpscraper
+# tpscraper — TakeProfit market data API
 
-A local, read-only market-data service for TakeProfit. Stream quotes and candles into a browser dashboard or consume them from another program through HTTP and server-sent events.
+A Python market-data collector and local API for TakeProfit. Stream live quotes, historical OHLCV candles, trade events and available Level 2 order-book data into a browser dashboard or another application using JSON over HTTP and Server-Sent Events (SSE).
+
+Designed for developers who need one local price-feed service for multiple instruments, with timestamped updates, freshness checks and automatic reconnection. Supports crypto, forex (FX), precious metals, equity indices and other available provider instruments.
 
 This is an unofficial integration. Use it only with your own account and where the platform and its data providers permit programmatic access. It does not grant exchange entitlements, guarantee real-time prices, place trades, or redistribute market data. For supported commercial integrations, see [TakeProfit's Platform API](https://www.takeprofit.com/docs/platform-api/overview).
+
+## What you can build
+
+Run one collector and let several local applications consume the same market-data feed instead of opening separate upstream connections for each application.
+
+| Application | Typical integration |
+|---|---|
+| Discord ticker or price-alert bot | Read eligible quotes in a local bot process and evaluate price thresholds. Display or send data only to recipients covered by the provider's redistribution terms. |
+| Prediction and forecasting application | Combine synchronized returns, recent candles, order-flow features and multiple market inputs. Use per-symbol freshness flags and reject stale or unverified data. |
+| Custom stock, forex or crypto dashboard | Discover provider/ticker pairs and render quotes, candlesticks, and available depth from the JSON API. |
+| Algorithmic trading research and paper trading | Record observations locally, calculate features and evaluate strategies independently of collection. No order execution is included. |
+| Portfolio monitor and desktop price widget | Use a filtered quote endpoint or the quote-only SSE stream; handle closed markets and unavailable instruments explicitly. |
+| Quantitative research and data validation | Analyze retained OHLCV, price relationships, trade pressure, timestamp alignment and observed feed quality. |
+
+For example, a model tracking gold could consume gold, silver, currency and Treasury price proxies together, then make its own independent forecast. A crypto application could compare spot and perpetual instruments. Neither approach establishes a predictive edge or makes these prices official settlement references.
+
+All clients run on the same trusted computer; the service does not expose a public market-data server or grant permission to republish prices in Discord, on websites or through another API. Access, supported features, delay and redistribution rights depend on the provider and account.
 
 ## Quick start
 
@@ -108,6 +127,7 @@ Advanced subscriptions require `--orderflow --authorized`. The default advanced 
 - [Installation and account connection](docs/SETUP.md)
 - [HTTP and streaming API](docs/API.md)
 - [Operations and validation](docs/OPERATIONS.md)
+- [Instrument reference and ticker discovery](docs/INSTRUMENTS.md)
 - [Security and local storage](SECURITY.md)
 
 ## Development
@@ -117,6 +137,6 @@ py -m compileall -q tpscraper tests
 py -m unittest discover -s tests -v
 ```
 
-The test suite uses synthetic data and local loopback services. Live account access, browser renewal, provider availability and long-running resource usage require separate integration testing.
+The offline test suite uses synthetic fixtures, decoder regression fixtures and local loopback services. Live account access, browser renewal, provider availability and long-running resource usage require separate integration testing.
 
 The project remains pre-release. Do not expose the API publicly, commit account credentials, or redistribute provider data. A source-code license and publication review are required before a public release.
