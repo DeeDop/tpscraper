@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "tpscraper renewal",
-  "version": "1.0.0",
-  "description": "Optional local first-party authorization renewal for your own tpscraper process.",
+  "version": "1.1.0",
+  "description": "Local authorization for tpscraper using your signed-in TakeProfit session.",
   "permissions": [
     "alarms",
     "storage"
