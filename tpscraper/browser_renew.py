@@ -27,6 +27,8 @@ class RenewalBridge:
         self.request_in_progress=False
         self.token=None
         self.failure=False
+        self.status_checks=0
+        self.last_status_at=None
         bridge=self
 
         class Handler(BaseHTTPRequestHandler):
@@ -58,6 +60,8 @@ class RenewalBridge:
                 if self.path!="/status":
                     return self.reply(404,{"error":"unknown route"})
                 with bridge.lock:
+                    bridge.status_checks+=1
+                    bridge.last_status_at=time.monotonic()
                     needed=bridge.pending
                     request_id=bridge.request_id if needed else None
                 self.reply(200,{"renew":needed,"request_id":request_id})
@@ -106,9 +110,13 @@ class RenewalBridge:
             with self.lock:
                 value=self.token
                 failed=self.failure
+                contacted=self.last_status_at is not None and time.monotonic()-self.last_status_at<=timeout+1
             if not value:
-                raise AuthError("Browser renewal denied or sign-in expired." if failed else
-                                "Browser renewal timed out. Check Chrome and its pairing.")
+                if failed:
+                    raise AuthError("Browser authorization refused or sign-in expired. Check the signed-in account; explicitly pair again after resolving access.")
+                if contacted:
+                    raise AuthError("Chrome contacted the local service but did not return valid authorization. Open the extension popup and check its status.")
+                raise AuthError("No paired Chrome connection. Reload extension v1.2.0 or newer, disable old copies, and use --reset-pairing if the saved pairing is missing.")
             return value
         finally:
             with self.lock:
@@ -161,7 +169,8 @@ class BrowserRenewAuth(LocalChromeAuth):
         if created:
             self.emit("Pair the tpscraper extension: "+self.bridge.code)
         else:
-            self.emit("Saved local pairing loaded. Waiting for Chrome.")
+            self.emit("Saved local pairing loaded. No new code is required.")
+            self.emit("Open the extension popup and select Check connection now if Chrome has not connected.")
         if not persistent:
             self.emit("Secure pairing storage unavailable; pair again next launch.")
 
