@@ -1,6 +1,7 @@
 """Explicit local authorization. Secrets remain in memory; no browser extraction."""
 import base64
 import json
+import math
 import time
 from getpass import getpass
 import httpx
@@ -14,7 +15,8 @@ def expires_at(token):
     try:
         part = token.split(".")[1]
         claims = json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
-        return float(claims["exp"])
+        expiry=float(claims["exp"])
+        return expiry if math.isfinite(expiry) else None
     except (ValueError, KeyError, IndexError, TypeError):
         return None
 
