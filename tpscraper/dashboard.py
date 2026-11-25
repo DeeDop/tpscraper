@@ -375,13 +375,16 @@ def main(argv=None):
     server=None
     thread=None
     try:
-        # Authorize on main thread, before starting server.
+        # Construct the auth bridge on the main thread. In dashboard mode,
+        # open the local page before waiting for Chrome authorization.
         if args.auto_renew:
             from .browser_renew import BrowserRenewAuth
             auth=BrowserRenewAuth(store=store,reset_pairing=args.reset_pairing)
         else:
             auth=LocalChromeAuth(store=store,opener=lambda:open_chrome(args.chrome_profile))
-        auth.headers()
+        early_dashboard=args.auto_renew and not args.no_browser
+        if not early_dashboard:
+            auth.headers()
         handler=partial(DashboardHandler,state,stop)
         server=LocalServer((args.host,args.port),handler)
         server.daemon_threads=True
@@ -393,7 +396,13 @@ def main(argv=None):
             print(f"Legacy snapshot polling; target sweep {max(args.interval,len(instruments)/args.requests_per_second):g}s. Ctrl+C to stop.",flush=True)
         else:
             print(f"Native push: {len(instruments)} instruments, {args.history} initial 1m bars per instrument, 30s={args.native_30s}. Ctrl+C to stop.",flush=True)
-        if not args.no_browser:
+        if early_dashboard:
+            try:
+                open_chrome(args.chrome_profile,url=url)
+            except AuthError:
+                print("Could not open Chrome automatically; open the dashboard in the paired Chrome profile.",flush=True)
+            auth.headers()
+        elif not args.no_browser:
             webbrowser.open(url)
         if args.snapshot:
             with httpx.Client(http2=True,timeout=10,follow_redirects=False,trust_env=False) as client:

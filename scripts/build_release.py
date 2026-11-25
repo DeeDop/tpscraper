@@ -13,7 +13,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
 DOCS = ("API.md", "INSTRUMENTS.md", "SETUP.md")
-EXTENSION = ("manifest.json", "popup.html", "popup.js", "worker.js")
+EXTENSION = ("manifest.json", "popup.html", "popup.js", "worker.js", "wake.js")
 PACKAGES = (
     "httpx", "httpcore", "h11", "h2", "hpack", "hyperframe", "certifi",
     "idna", "anyio", "sniffio", "typing-extensions", "exceptiongroup",
@@ -55,7 +55,7 @@ run run.cmd serve --workspace --watchlist btc --authorized --auto-renew --orderf
 For updates, keep the installed Chrome extension in the same directory.
 Replace its files from the new ZIP, then click Reload at chrome://extensions/.
 Disable duplicate old extensions. If the console reports saved pairing,
-open the extension popup and click Check connection now (v1.2.0 or newer).
+open the extension popup and click Check connection now (v1.3.0 or newer).
 Reset pairing only if missing or mismatched. See docs/SETUP.md for recovery.
 Do not copy credentials between computers.
 

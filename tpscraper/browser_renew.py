@@ -116,7 +116,7 @@ class RenewalBridge:
                     raise AuthError("Browser authorization refused or sign-in expired. Check the signed-in account; explicitly pair again after resolving access.")
                 if contacted:
                     raise AuthError("Chrome contacted the local service but did not return valid authorization. Open the extension popup and check its status.")
-                raise AuthError("No paired Chrome connection. Reload extension v1.2.0 or newer, disable old copies, and use --reset-pairing if the saved pairing is missing.")
+                raise AuthError("No paired Chrome connection. Reload extension v1.3.0 or newer, disable old copies, and use --reset-pairing if the saved pairing is missing.")
             return value
         finally:
             with self.lock:
@@ -170,7 +170,7 @@ class BrowserRenewAuth(LocalChromeAuth):
             self.emit("Pair the tpscraper extension: "+self.bridge.code)
         else:
             self.emit("Saved local pairing loaded. No new code is required.")
-            self.emit("Open the extension popup and select Check connection now if Chrome has not connected.")
+            self.emit("Waiting for the paired Chrome extension; no popup click should be needed.")
         if not persistent:
             self.emit("Secure pairing storage unavailable; pair again next launch.")
 

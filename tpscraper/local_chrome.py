@@ -30,14 +30,14 @@ def chrome_path():
     raise AuthError("Installed Chrome not found. Open the TakeProfit token page manually or use manual token mode.")
 
 
-def open_chrome(profile=None):
+def open_chrome(profile=None, url=TOKEN_URL):
     try:
         args = [chrome_path()]
         if profile is not None:
             if not re.fullmatch(r"Default|Profile [0-9]+", profile):
                 raise AuthError("Choose Default or Profile N for an existing Chrome profile.")
             args.append("--profile-directory=" + profile)
-        args.append(TOKEN_URL)
+        args.append(url)
         subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except OSError:
         raise AuthError("Could not open installed Chrome.") from None

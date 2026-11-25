@@ -1,6 +1,8 @@
 const LOCAL = "http://127.0.0.1:8790";
 const TOKEN = "https://takeprofit.com/api/auth/token";
 let busy = false;
+let restoring = null;
+const ALARM = "renew";
 
 async function isPaired(pair) {
   return (await chrome.storage.local.get("pair")).pair === pair;
@@ -115,29 +117,52 @@ async function poll() {
   }
 }
 
-async function restore() {
-  await chrome.storage.local.setAccessLevel({accessLevel: "TRUSTED_CONTEXTS"});
-  const {pair} = await chrome.storage.local.get("pair");
-  if (pair) {
-    if (!(await chrome.alarms.get("renew")))
-      await chrome.alarms.create("renew", {periodInMinutes: 0.5});
-    void poll();
-  }
+async function ensureAlarm() {
+  const alarm = await chrome.alarms.get(ALARM);
+  if (!alarm || alarm.periodInMinutes !== 0.5)
+    await chrome.alarms.create(ALARM, {delayInMinutes: 0.5, periodInMinutes: 0.5});
 }
-chrome.runtime.onStartup.addListener(() => void restore());
-chrome.runtime.onInstalled.addListener(() => void restore());
+
+function restore() {
+  if (restoring) return restoring;
+  restoring = (async () => {
+    await chrome.storage.local.setAccessLevel({accessLevel: "TRUSTED_CONTEXTS"});
+    const {pair} = await chrome.storage.local.get("pair");
+    if (pair) {
+      await ensureAlarm();
+      await poll();
+    }
+  })().finally(() => { restoring = null; });
+  return restoring;
+}
+function wake() { void restore().catch(() => {}); }
+// Register synchronously before doing asynchronous work so MV3 can dispatch
+// events even when the service worker has been suspended.
+chrome.runtime.onStartup.addListener(wake);
+chrome.runtime.onInstalled.addListener(wake);
 chrome.alarms.onAlarm.addListener(alarm => {
-  if (alarm.name === "renew") void poll();
+  if (alarm.name === ALARM) wake();
 });
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (sender.id !== chrome.runtime.id) return;
+  // A local dashboard can only request a wake-up, never credentials or pairing.
+  // Other messages must originate from the extension itself, not a web page.
+  if (message.type === "dashboard-wake") {
+    try {
+      const url = new URL(sender.url || "");
+      if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || url.pathname !== "/") return;
+    } catch { return; }
+    restore().then(() => respond({ok: true}), () => respond({ok: false}));
+    return true;
+  }
+  if (sender.tab) return;
   if (message.type === "pair" && /^[A-Za-z0-9_-]{43}$/.test(message.code || "")) {
     (async () => {
       await chrome.storage.local.setAccessLevel({accessLevel: "TRUSTED_CONTEXTS"});
       await chrome.storage.local.set({pair: message.code, status: "Paired; checking authorization."});
-      await chrome.alarms.create("renew", {periodInMinutes: 0.5});
+      await ensureAlarm();
       respond({ok: true});
-      void poll();
+      wake();
     })().catch(() => respond({ok: false}));
     return true;
   }
@@ -150,3 +175,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     return true;
   }
 });
+
+// Alarms are not guaranteed to survive a browser restart or extension update.
+// Reconcile stored pairing on every worker activation, not just popup clicks.
+wake();
