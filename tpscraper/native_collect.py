@@ -25,6 +25,13 @@ def collect_native(state,auth,stop):
             by_pair[pair]=[]
         by_pair[pair].append(inst.key)
     retired=set()  # terminal feature failures persist across token rotations
+    retired_lock=threading.Lock()
+    def retire(capability):
+        with retired_lock:
+            retired.add(capability)
+    def retired_jobs():
+        with retired_lock:
+            return frozenset(retired)
     previous_expiry=None
     generation=0
     while not stop.is_set():
@@ -83,7 +90,7 @@ def collect_native(state,auth,stop):
                                     if capability is not None and (http==403 or grpc==7):
                                         report("restricted")
                                         state.stream_event(label,"error","feature restricted")
-                                        retired.add(capability)
+                                        retire(capability)
                                         return
                                     if http in (401,403,429) or grpc in (7,8,16):
                                         reason=f"{label}: access or rate restriction ({http or grpc})"
@@ -100,7 +107,7 @@ def collect_native(state,auth,stop):
                                     if http or grpc not in (0,None) or raw.get("error"):
                                         report(f"service unavailable ({http or grpc or raw.get('error')})")
                                         if capability is not None:
-                                            retired.add(capability)
+                                            retire(capability)
                                         return
                                     break
                                 item=decode(raw)
@@ -132,7 +139,7 @@ def collect_native(state,auth,stop):
                         report(type(exc).__name__)
                         if isinstance(exc,(ValueError,KeyError,TypeError,OverflowError)):
                             if capability is not None:
-                                retired.add(capability)
+                                retire(capability)
                             return  # Never retry an unknown schema in a loop.
                     # Slow recovery after repeated transport failures. No access-denial
                     # retries or schema guessing. Keep healthy streams running.
@@ -187,13 +194,13 @@ def collect_native(state,auth,stop):
                 # Queue every entered ticker. Catalog information only prioritizes;
                 # a missing record never prevents discovery.
                 pending=state.capabilities.queue(state.flows,state.refresh_capabilities) if state.flows else []
-                pending=[(k,kind) for k,kind in pending if (state.flows[k].symbol,kind) not in retired]
+                pending=[(k,kind) for k,kind in pending if (state.flows[k].symbol,kind) not in retired_jobs()]
                 for key,flow in state.flows.items():
-                    for symbol,kind in tuple(retired):
+                    for symbol,kind in retired_jobs():
                         if symbol==flow.symbol:
                             flow.status(kind,"disabled_until_restart")
                 retry_jobs={(key,kind):time.monotonic()+60 for key,flow in state.flows.items() for kind in flow.states
-                            if (key,kind) not in pending and (flow.symbol,kind) not in retired}
+                            if (key,kind) not in pending and (flow.symbol,kind) not in retired_jobs()}
                 active={}
                 decoders={"trades":trade_rows,"footprint":lambda raw:footprint_rows(raw,full=True),
                           "orderbook":lambda raw:book_summary(raw,full=True),
@@ -226,7 +233,7 @@ def collect_native(state,auth,stop):
                             continue
                         key,kind=job
                         flow=state.flows[key]
-                        if (flow.symbol,kind) in retired:
+                        if (flow.symbol,kind) in retired_jobs():
                             del retry_jobs[job]
                             continue
                         if state.capabilities.lookup(flow.symbol,kind) in ("no_data","unavailable","unsupported"):
@@ -258,6 +265,12 @@ def collect_native(state,auth,stop):
                     stop.wait(0.25)
             finally:
                 cycle.set()
+                state.all_quotes("native streams paused")
+                for inst in state.instruments:
+                    for period in ((60,30) if state.micro else (60,)):
+                        state.bar_state(inst.key,period,"paused")
+                for flow in state.flows.values():
+                    flow.pause()
                 # Close sockets to wake blocked readers before joining threads.
                 # Bound total shutdown time rather than waiting once per socket.
                 try:
