@@ -73,8 +73,13 @@ class NativeDashboardState:
             for name in ("main_session","daily_session"):
                 if name in item:
                     target=r["sessions"].setdefault(name,{})
-                    incoming=item[name]
+                    incoming=dict(item[name])
                     incoming_time=incoming.get("exchange_timestamp")
+                    if incoming_time is not None and (not isinstance(incoming_time,(int,float)) or not math.isfinite(incoming_time) or incoming_time>now+2):
+                        incoming.pop("exchange_timestamp",None)
+                        incoming_time=None
+                    if "last" in incoming and (not isinstance(incoming["last"],(int,float)) or not math.isfinite(incoming["last"]) or incoming["last"]<=0):
+                        continue
                     previous_time=target.get("exchange_timestamp")
                     if incoming_time is not None and previous_time is not None and incoming_time<previous_time:
                         continue
@@ -87,11 +92,14 @@ class NativeDashboardState:
             if "last" not in update:
                 return
             p=update["last"]
-            if not math.isfinite(p) or p<=0:
+            if not isinstance(p,(int,float)) or not math.isfinite(p) or p<=0:
                 return
             ts=update.get("exchange_timestamp")
-            if ts is not None and (not math.isfinite(ts) or ts>now+2):
+            if ts is not None and (not isinstance(ts,(int,float)) or not math.isfinite(ts) or ts>now+2):
                 ts=None
+            session_ts=r["sessions"].get(name,{}).get("exchange_timestamp")
+            if ts is not None and session_ts is not None and ts<session_ts:
+                return
             if ts is not None and r["exchange"] is not None and ts<r["exchange"]:
                 return
             r["changes"]+=int(r["last"] is not None and r["last"]!=p)
@@ -184,7 +192,7 @@ class NativeDashboardState:
                 # Heavy completed-bar statistics are cached until the next closed
                 # minute, or until historical bars are revised.
                 latest_closed=max((t for t in bars if t+60<=now),default=None)
-                cache_key=(r["bar_revision"],latest_closed)
+                cache_key=(r["bar_revision"],latest_closed,min(bars,default=None),len(bars))
                 cached=r["stats_cache"]
                 if cached is None or cached[0]!=cache_key:
                     rr=list(returns(self.series(bars,60,now)).values())
