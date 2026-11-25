@@ -25,13 +25,16 @@ All clients run on the same trusted computer; the service does not expose a publ
 
 ## Quick start
 
-Requirements: Windows, Python 3.11 or later, Chrome, and an authorized TakeProfit account.
+Requirements: Windows 10/11, Python 3.11 or later, Chrome, and an authorized TakeProfit account. No administrator privileges or fixed installation directory are required.
 
 ```powershell
 git clone https://github.com/DeeDop/tpscraper.git
 cd tpscraper
-py -m pip install -r requirements.txt
 ```
+
+Alternatively, download the repository as a ZIP from GitHub and extract it anywhere you have read access. Double-click `run.cmd` in the extracted folder. It creates an isolated per-checkout Python environment in your user data directory, installs dependencies on the first launch or when requirements change, and asks for permission before connecting. To install without connecting, run `run.cmd --setup-only`.
+
+For a terminal-based setup, `py launch.py --setup-only` works from the checkout. You may also install dependencies into a virtual environment yourself and use the original `py -m tpscraper` commands with the appropriate interpreter.
 
 ### Connect your account
 
@@ -40,12 +43,12 @@ py -m pip install -r requirements.txt
 3. Start the service:
 
    ```powershell
-   py -m tpscraper dashboard --workspace --watchlist btc --authorized --auto-renew --orderflow
+   .\run.cmd
    ```
 
-4. On the first run, open the extension popup, enter the local pairing code printed in the terminal, and select **Authorize and pair**.
+4. Confirm permission in the launcher. On the first run, open the extension popup, enter the local pairing code printed in the terminal, and select **Authorize and pair**.
 
-The extension remembers the pairing. Subsequent runs use the same signed-in Chrome session without another pairing code or token copy. Chrome must remain open and signed in. If authorization expires or is refused, sign in again where permitted and restart. This is browser-session reuse, not an independent OAuth or SSO provider.
+Pair once on each computer and in each Chrome profile you intend to use. Credentials are local to the operating-system user and are never transferred with a clone or ZIP. The extension remembers the pairing. Subsequent runs use the same signed-in Chrome session without another pairing code or token copy. Chrome must remain open and signed in. If authorization expires or is refused, sign in again where permitted and restart. This is browser-session reuse, not an independent OAuth or SSO provider.
 
 Open **http://127.0.0.1:8789/**. Stop the service with Ctrl+C.
 
@@ -58,7 +61,7 @@ Use **+ Manage tickers** in the dashboard to search the catalog, choose a preset
 To specify instruments directly:
 
 ```powershell
-py -m tpscraper dashboard --authorized --auto-renew --ticker "CXBNCE:BTC/USDT" --ticker "FXPPST:XAU/USD"
+.\run.cmd dashboard --authorized --auto-renew --ticker "CXBNCE:BTC/USDT" --ticker "FXPPST:XAU/USD"
 ```
 
 Up to 12 instruments per process. Custom symbols do not have to appear in the offline catalog. Availability and data entitlement are determined by the provider.
@@ -76,10 +79,10 @@ These presets are convenience lists, not exchange entitlement or latency guarant
 
 ## Local API
 
-Run without opening the dashboard:
+Run without opening the dashboard (using the launcher-managed environment):
 
 ```powershell
-py -m tpscraper serve --workspace --watchlist btc --authorized --auto-renew --orderflow
+.\run.cmd serve --workspace --watchlist btc --authorized --auto-renew --orderflow
 ```
 
 The API listens on `127.0.0.1:8789`. It is intended for trusted software on the same computer.
