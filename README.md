@@ -23,6 +23,10 @@ For example, a model tracking gold could consume gold, silver, currency and Trea
 
 All clients run on the same trusted computer; the service does not expose a public market-data server or grant permission to republish prices in Discord, on websites or through another API. Access, supported features, delay and redistribution rights depend on the provider and account.
 
+## Windows portable release
+
+For a computer that does not need the development source, use the [Releases page](https://github.com/DeeDop/tpscraper/releases). Download the `tpscraper-windows-x64.zip` asset, verify it against `SHA256SUMS.txt`, extract the entire ZIP, and run `run.cmd`. The portable build bundles the Python runtime and dependencies; it requires Chrome, a supported Windows x64 installation, and first-time account pairing on each computer. It does not require Git or Python to be installed. The ZIP intentionally excludes Git history, source tests, development scripts, local databases and credentials. Builds are unsigned pre-releases for private testing; live authorization and feed behavior require separate validation.
+
 ## Quick start
 
 Requirements: Windows 10/11, Python 3.11 or later, Chrome, and an authorized TakeProfit account. No administrator privileges or fixed installation directory are required.
@@ -134,6 +138,9 @@ Advanced subscriptions require `--orderflow --authorized`. The default advanced 
 - [Security and local storage](SECURITY.md)
 
 ## Development
+
+The main branch is the developer checkout. To publish a new portable build, increment `release/VERSION` to an unused version tag and push it to main. The Windows release workflow runs the regression and repository privacy checks, builds a fresh distribution, checks the executable before and after ZIP extraction, and publishes the ZIP and checksum only after those steps succeed. Use the custom release asset, not GitHub's automatically generated source archives. A build can also be triggered from the Actions tab. Release assets inherit repository visibility.
+
 
 ```powershell
 py -m compileall -q tpscraper tests
